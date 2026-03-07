@@ -1,4 +1,4 @@
-export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xA7755BD515CeD9661779ac8F46426f57cdf123D";
+export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xf7A7F22e5a5d6f52Ab52FA07ddBC45A5484Af250";
 
 // We copy the ABI from public/config.js. Note: in a real production app you'd import this directly from the backend's artifacts folder if using a shared package.
 export const CONTRACT_ABI = [
