@@ -1,7 +1,7 @@
 import hre from "hardhat";
 
 async function main() {
-    const contractAddress = "0x6257ccfDBdFB3Ae347a6340c14fFf7a1D352Fc858";
+    const contractAddress = "0xA7755BD515CeD9661779ac8F46426f57cdf123D";
 
     const abi = [
         "function admin() view returns (address)",
@@ -15,10 +15,6 @@ async function main() {
 
     const adminAddress = await contract.admin();
     console.log("Admin address on contract:", adminAddress);
-
-    const testAddress = "0x8Df0e70768962734771500bA32c4d6214c2cca0b";
-    console.log("Your MetaMask address:    ", testAddress);
-    console.log("Match:", adminAddress.toLowerCase() === testAddress.toLowerCase());
 
     const isRegistered = await contract.isUserRegistered(testAddress);
     console.log("Is registered:", isRegistered);
