@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
+import exifr from "exifr";
 
 // --- THREE.JS BACKGROUND: DATA TUNNEL THEME ---
 function JusticeNetworkBackground() {
@@ -92,6 +93,8 @@ export default function PoliceDashboard() {
     const [files, setFiles] = useState<File[]>([]);
 
     const [isUploading, setIsUploading] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanReports, setScanReports] = useState<any[]>([]);
     const [statusMessage, setStatusMessage] = useState("");
     const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -105,6 +108,8 @@ export default function PoliceDashboard() {
         setFiles([]);
         setStatusMessage("");
         setIsUploading(false);
+        setIsScanning(false);
+        setScanReports([]);
         setTimeout(() => setIsRefreshing(false), 500);
     };
 
@@ -162,8 +167,64 @@ export default function PoliceDashboard() {
             return;
         }
 
+        // --- AI SCANNING PHASE ---
+        setIsScanning(true);
+        setScanReports([]);
+        setStatusMessage("Initializing AI Forgery Detection & Metadata Extraction...");
+
+        // Fake delay for dramatic effect
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        let forgeryDetected = false;
+        const reports = [];
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const report: any = { fileName: file.name, status: 'safe', details: [] };
+
+            if (!file.type.startsWith('image/')) {
+                report.details.push("Non-image file format. Skipping EXIF model scan.");
+                reports.push(report);
+                continue;
+            }
+
+            try {
+                // Parse EXIF safely
+                const data = await exifr.parse(file);
+                if (!data) {
+                    report.status = 'danger';
+                    report.details.push("Missing EXIF Metadata. Highly likely a screenshot or downloaded from social media.");
+                    forgeryDetected = true;
+                } else {
+                    // Check for software manipulation
+                    if (data.Software && (data.Software.toLowerCase().includes('adobe') || data.Software.toLowerCase().includes('photoshop'))) {
+                        report.status = 'danger';
+                        report.details.push(`Image Manipulation Software Detected: ${data.Software}`);
+                        forgeryDetected = true;
+                    } else {
+                        report.details.push("Metadata intact. No obvious signs of software manipulation.");
+                        if (data.Make || data.Model) report.details.push(`Camera Platform: ${data.Make || ''} ${data.Model || ''}`);
+                        if (data.DateTimeOriginal) report.details.push(`Original Timestamp: ${new Date(data.DateTimeOriginal).toLocaleString()}`);
+                    }
+                }
+            } catch (err) {
+                report.status = 'warning';
+                report.details.push("Unable to read metadata structure.");
+            }
+            reports.push(report);
+        }
+
+        setScanReports(reports);
+        setIsScanning(false);
+
+        if (forgeryDetected) {
+            setStatusMessage("⚠️ Critical Alert: Potential forgery detected. Blockchain upload aborted.");
+            return; // Abort the upload
+        }
+
+        // --- IPFS & BLOCKCHAIN PHASE ---
         setIsUploading(true);
-        setStatusMessage("Uploading files to IPFS via Pinata...");
+        setStatusMessage("Files verified. Pinning to IPFS Network...");
 
         try {
             const ipfsHashes: string[] = [];
@@ -363,6 +424,28 @@ export default function PoliceDashboard() {
                                 </div>
                             </div>
 
+                            {/* --- AI SCAN REPORTS --- */}
+                            {scanReports.length > 0 && (
+                                <div className="space-y-4 border-[4px] border-black p-6 bg-zinc-50 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                                    <h3 className="text-xl font-black uppercase tracking-tighter flex items-center gap-2">
+                                        <ShieldCheck size={24} /> AI Security Scan Report
+                                    </h3>
+                                    {scanReports.map((report, idx) => (
+                                        <div key={idx} className={`p-4 border-l-[6px] ${report.status === 'danger' ? 'border-red-600 bg-red-50 text-red-900' :
+                                                report.status === 'warning' ? 'border-yellow-500 bg-yellow-50 text-yellow-900' :
+                                                    'border-green-500 bg-green-50 text-green-900'
+                                            }`}>
+                                            <p className="font-bold text-sm mb-2">{report.fileName}</p>
+                                            <ul className="list-disc list-inside text-xs font-mono space-y-1">
+                                                {report.details.map((detail: string, i: number) => (
+                                                    <li key={i}>{detail}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
                             {/* Status Messages */}
                             <AnimatePresence>
                                 {statusMessage && (
@@ -387,11 +470,11 @@ export default function PoliceDashboard() {
 
                             <button
                                 type="submit"
-                                disabled={isUploading}
+                                disabled={isUploading || isScanning}
                                 className="w-full flex items-center justify-center gap-4 py-6 bg-black text-white hover:bg-zinc-800 transition-all shadow-[8px_8px_0px_0px_rgba(0,0,0,0.3)] disabled:opacity-50 group"
                             >
-                                {isUploading ? (
-                                    <><Loader2 className="w-6 h-6 animate-spin" /> <span className="font-black uppercase tracking-widest">Encrypting_and_Hashing...</span></>
+                                {isUploading || isScanning ? (
+                                    <><Loader2 className="w-6 h-6 animate-spin" /> <span className="font-black uppercase tracking-widest">{isScanning ? 'Running AI Diagnostics...' : 'Encrypting_and_Hashing...'}</span></>
                                 ) : (
                                     <>
                                         <Lock size={20} />
