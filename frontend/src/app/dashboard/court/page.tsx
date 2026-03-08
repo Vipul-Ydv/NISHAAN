@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
 import {
     Scale, Loader2, Search, CheckCircle, FileWarning,
-    Eye, Gavel, ShieldCheck, Fingerprint, Database
+    Eye, Gavel, ShieldCheck, Fingerprint, Database, Home
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
@@ -203,6 +203,10 @@ export default function CourtDashboard() {
                                 COURT PANEL
                             </div>
                         </div>
+
+                        <button onClick={() => router.push("/")} className="w-full flex items-center justify-center gap-3 bg-white border-[4px] border-black p-4 font-black uppercase text-sm tracking-tighter hover:bg-black hover:text-white transition-colors shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-2 hover:translate-y-2">
+                            <Home size={20} strokeWidth={3} /> Return to Home
+                        </button>
 
                         <div className="border-[4px] border-black bg-white p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
                             <div className="flex items-center gap-3 mb-4">

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWeb3 } from "../../../context/Web3Context";
 import { useRouter } from "next/navigation";
-import { UploadCloud, ShieldAlert, Loader2, File as FileIcon, EyeOff, Lock, ArrowRight, Database } from "lucide-react";
+import { UploadCloud, ShieldAlert, Loader2, File as FileIcon, EyeOff, Lock, ArrowRight, Database, Home } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
 
@@ -141,11 +141,15 @@ export default function Whistleblower() {
         <div className="min-h-screen text-white selection:bg-red-600 selection:text-white font-sans overflow-x-hidden">
             <DarkNetBackground />
 
-            {/* Header / Nav */}
             <header className="absolute top-0 w-full p-8 z-20 flex justify-between items-center">
-                <button onClick={() => router.push("/")} className="font-black text-3xl tracking-tighter uppercase italic text-zinc-600 hover:text-white transition-colors">
-                    NISHAAN
-                </button>
+                <div className="flex gap-6 items-center">
+                    <button onClick={() => router.push("/")} className="font-black text-3xl tracking-tighter uppercase italic text-zinc-600 hover:text-white transition-colors">
+                        NISHAAN
+                    </button>
+                    <button onClick={() => router.push("/")} className="hidden md:flex items-center gap-2 text-zinc-400 hover:text-white transition-colors text-xs font-mono uppercase font-bold bg-zinc-900 border border-zinc-700 px-3 py-1.5 rounded-sm">
+                        <Home size={14} /> Back to Home
+                    </button>
+                </div>
                 {!account ? (
                     <button onClick={connectWallet} className="border-2 border-red-600 text-red-500 px-6 py-2 font-mono text-xs uppercase hover:bg-red-600 hover:text-white transition-all">
                         Connect Anonymous Wallet

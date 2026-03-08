@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
 import {
     Loader2, Users, FileStack, Activity, Check, X,
-    ArrowRight, Database, ShieldAlert, RefreshCw
+    ArrowRight, Database, ShieldAlert, RefreshCw, Home
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
@@ -134,7 +134,7 @@ export default function AdminDashboard() {
                 const eId = await contract.evidenceIds(i);
                 const ev = await contract.getEvidenceData(eId);
                 const hashesArr = ev[0] || ev.ipfsHashes || [];
-                const typeDisplay = hashesArr.length > 0 ? `${hashesArr.length} File${hashesArr.length > 1 ? 's' : ''}` : "—";
+                const typeDisplay = hashesArr.length > 0 ? `${hashesArr.length} File${hashesArr.length > 1 ? 's' : ''} ` : "—";
 
                 evidenceArr.push({
                     id: eId,
@@ -191,11 +191,15 @@ export default function AdminDashboard() {
                     {/* Sidebar Navigation */}
                     <aside className="lg:w-80 space-y-12">
                         <div className="border-l-[10px] border-black pl-8 py-2">
-                            <h1 className="text-6xl font-[1000] tracking-tighter uppercase leading-none">NISHAAN</h1>
+                            <h1 className="text-6xl font-[1000] tracking-tighter uppercase leading-none italic">NISHAAN</h1>
                             <div className="bg-black text-white inline-block px-3 py-1 mt-4 text-[10px] font-mono font-black uppercase tracking-[0.3em]">
-                                Admin Panel
+                                ADMIN TERMINAL
                             </div>
                         </div>
+
+                        <button onClick={() => router.push("/")} className="w-full flex items-center justify-center gap-3 bg-white border-[4px] border-black p-4 font-black uppercase text-sm tracking-tighter hover:bg-black hover:text-white transition-colors shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-2 hover:translate-y-2">
+                            <Home size={20} strokeWidth={3} /> Return to Home
+                        </button>
 
                         <nav className="flex flex-col border-[4px] border-black bg-white shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
                             {[
@@ -206,15 +210,15 @@ export default function AdminDashboard() {
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
-                                    className={`group flex items-center justify-between p-6 transition-all border-b-[4px] border-black last:border-0 ${activeTab === tab.id ? "bg-zinc-100 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)]" : "hover:bg-zinc-50 text-black"
-                                        }`}
+                                    className={`group flex items - center justify - between p - 6 transition - all border - b - [4px] border - black last: border - 0 ${activeTab === tab.id ? "bg-zinc-100 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)]" : "hover:bg-zinc-50 text-black"
+                                        } `}
                                 >
                                     <div className="flex items-center gap-4">
                                         <tab.icon size={20} strokeWidth={3} className={activeTab === tab.id ? "text-blue-600" : ""} />
                                         <span className="font-[900] uppercase text-sm tracking-tighter">{tab.label}</span>
                                     </div>
                                     {tab.count !== undefined && tab.count > 0 ? (
-                                        <span className={`px-2 py-1 font-mono text-xs font-black ${activeTab === tab.id ? "bg-blue-600 text-white" : "bg-black text-white"}`}>
+                                        <span className={`px - 2 py - 1 font - mono text - xs font - black ${activeTab === tab.id ? "bg-blue-600 text-white" : "bg-black text-white"} `}>
                                             {tab.count}
                                         </span>
                                     ) : <ArrowRight size={16} />}
@@ -335,10 +339,10 @@ export default function AdminDashboard() {
                                                                 <td className="px-4 py-4 border-r border-black/10 font-bold">{ev.officer}</td>
                                                                 <td className="px-4 py-4 border-r border-black/10 text-zinc-600">{ev.type}</td>
                                                                 <td className="px-4 py-4 border-r border-black/10">
-                                                                    <span className={`px-2 py-1 font-black uppercase ${ev.status === 2 ? 'bg-green-100 text-green-700' :
+                                                                    <span className={`px - 2 py - 1 font - black uppercase ${ev.status === 2 ? 'bg-green-100 text-green-700' :
                                                                         ev.status === 1 ? 'bg-yellow-100 text-yellow-700' :
                                                                             'bg-blue-100 text-blue-700'
-                                                                        }`}>
+                                                                        } `}>
                                                                         {ev.status === 2 ? 'Verified' : ev.status === 1 ? 'Reviewing' : 'Logged'}
                                                                     </span>
                                                                 </td>
