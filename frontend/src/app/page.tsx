@@ -115,6 +115,12 @@ export default function Home() {
             >
               Access System
             </Link>
+            <Link
+              href="/dashboard/whistleblower"
+              className="group relative px-12 py-6 bg-red-600 text-white text-xl font-black uppercase tracking-widest shadow-[15px_15px_0px_0px_rgba(0,0,0,0.2)] hover:shadow-none hover:translate-x-2 hover:translate-y-2 transition-all"
+            >
+              Anonymous Tip Area
+            </Link>
             <a
               href="#architecture"
               className="px-12 py-6 border-[4px] border-black bg-transparent text-black text-xl font-black uppercase tracking-widest hover:bg-black hover:text-white transition-all"

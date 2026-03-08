@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
 import {
     Loader2, Users, FileStack, Activity, Check, X,
-    ArrowRight, Database, ShieldAlert, RefreshCw
+    ArrowRight, Database, ShieldAlert, RefreshCw, EyeOff
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
@@ -89,6 +89,7 @@ export default function AdminDashboard() {
     const [activeTab, setActiveTab] = useState("pending");
     const [pendingUsers, setPendingUsers] = useState<any[]>([]);
     const [allEvidence, setAllEvidence] = useState<any[]>([]);
+    const [allTips, setAllTips] = useState<any[]>([]);
     const [stats, setStats] = useState({ evidenceCount: 0, pendingCount: 0, adminAddress: "" });
     const [isProcessing, setIsProcessing] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -146,6 +147,19 @@ export default function AdminDashboard() {
                 });
             }
             setAllEvidence(evidenceArr.sort((a, b) => b.timestamp - a.timestamp));
+
+            let tipsArr = [];
+            const tipsCount = await contract.getTipsCount();
+            for (let i = 0; i < Number(tipsCount); i++) {
+                const tip = await contract.getTip(i);
+                tipsArr.push({
+                    hash: tip[0],
+                    desc: tip[1],
+                    timestamp: Number(tip[2]),
+                    submitter: tip[3]
+                });
+            }
+            setAllTips(tipsArr.reverse());
         } catch (err) {
             console.error("Error fetching admin data", err);
         }
@@ -200,6 +214,7 @@ export default function AdminDashboard() {
                             {[
                                 { id: "pending", label: "Registration Requests", icon: Users, count: pendingUsers.filter((u: any) => u.status === 0).length },
                                 { id: "evidence", label: "Received Evidences", icon: FileStack },
+                                { id: "tips", label: "Anonymous Drops", icon: EyeOff, count: allTips.length },
                                 { id: "stats", label: "System Telemetry", icon: Activity }
                             ].map((tab) => (
                                 <button
@@ -348,6 +363,50 @@ export default function AdminDashboard() {
                                                         ))}
                                                     </tbody>
                                                 </table>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* TIPS TAB */}
+                                {activeTab === "tips" && (
+                                    <div>
+                                        <div className="flex items-center gap-4 mb-8 pb-4 inline-flex">
+                                            <button onClick={handleRefresh} disabled={isRefreshing} className="p-2.5 bg-black text-white hover:bg-zinc-800 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.5)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 disabled:opacity-50">
+                                                <RefreshCw size={22} strokeWidth={3} className={isRefreshing ? 'animate-spin' : ''} />
+                                            </button>
+                                            <h2 className="text-3xl font-[1000] uppercase tracking-tighter text-red-600 flex items-center gap-3">
+                                                Anonymous Drops <EyeOff size={32} />
+                                            </h2>
+                                        </div>
+                                        {allTips.length === 0 ? (
+                                            <EmptyState
+                                                icon={EyeOff}
+                                                title="No Secure Drops"
+                                                message="The anonymous ledger has not registered any recent incoming whistleblowers."
+                                            />
+                                        ) : (
+                                            <div className="space-y-6">
+                                                {allTips.map((tip, i) => (
+                                                    <div key={i} className="border-[4px] border-red-600 bg-black text-white p-6 shadow-[8px_8px_0px_0px_rgba(255,0,0,0.5)]">
+                                                        <div className="flex justify-between items-start mb-4 border-b-[2px] border-zinc-800 pb-4">
+                                                            <div className="flex items-center gap-3">
+                                                                <span className="bg-red-600 px-3 py-1 font-black text-xs uppercase">Drop #{allTips.length - i}</span>
+                                                                <span className="text-zinc-400 font-mono text-[10px]">{new Date(tip.timestamp * 1000).toLocaleString()}</span>
+                                                            </div>
+                                                            <a href={`https://gateway.pinata.cloud/ipfs/${tip.hash}`} target="_blank" rel="noopener noreferrer" className="bg-white text-black px-4 py-2 font-black text-xs hover:bg-zinc-300 transition-colors">
+                                                                View Encrypted Asset
+                                                            </a>
+                                                        </div>
+                                                        <p className="font-mono text-sm leading-relaxed text-zinc-300 mb-4 whitespace-pre-wrap font-bold">
+                                                            {tip.desc}
+                                                        </p>
+                                                        <div className="flex justify-between items-center bg-zinc-900 border-[2px] border-zinc-700 p-3">
+                                                            <span className="text-[10px] font-black uppercase text-zinc-500">Hash ID</span>
+                                                            <span className="font-mono text-[10px] text-zinc-400 truncate ml-2 max-w-sm">{tip.hash}</span>
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>

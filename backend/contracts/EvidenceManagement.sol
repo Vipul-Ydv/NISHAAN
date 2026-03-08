@@ -7,6 +7,13 @@ contract EvidenceManagement {
     enum UserStatus { Pending, Approved, Rejected }
 
     // --- Structs ---
+    struct Tip {
+        string ipfsHash;
+        string description;
+        uint256 timestamp;
+        address submitter;
+    }
+
     struct Evidence {
         string[] ipfsHashes;
         string caseNumber;
@@ -44,6 +51,9 @@ contract EvidenceManagement {
     // Pending user list for admin approval
     address[] public pendingUsers;
 
+    // Anonymous Tips
+    Tip[] public anonymousTips;
+
     // --- Events ---
     event EvidenceAdded(string evidenceId, uint256 fileCount, string officerName, uint256 timestamp);
     event EvidenceAccessed(string evidenceId, address accessedBy, uint256 timestamp);
@@ -51,6 +61,7 @@ contract EvidenceManagement {
     event UserRegistered(address userAddress, string role, string name);
     event UserApproved(address userAddress, string role, address approvedBy);
     event UserRejected(address userAddress, address rejectedBy);
+    event TipSubmitted(uint256 tipId, address submitter, uint256 timestamp);
 
     // --- Modifiers ---
     modifier onlyAdmin() {
@@ -306,5 +317,30 @@ contract EvidenceManagement {
 
     function getAdmin() public view returns (address) {
         return admin;
+    }
+
+    // --- Whistleblower ---
+    function submitAnonymousTip(string memory _ipfsHash, string memory _description) public {
+        anonymousTips.push(Tip({
+            ipfsHash: _ipfsHash,
+            description: _description,
+            timestamp: block.timestamp,
+            submitter: msg.sender
+        }));
+        emit TipSubmitted(anonymousTips.length - 1, msg.sender, block.timestamp);
+    }
+
+    function getTipsCount() public view returns (uint256) {
+        return anonymousTips.length;
+    }
+
+    function getTip(uint256 _index) public view returns (
+        string memory ipfsHash,
+        string memory description,
+        uint256 timestamp,
+        address submitter
+    ) {
+        Tip memory t = anonymousTips[_index];
+        return (t.ipfsHash, t.description, t.timestamp, t.submitter);
     }
 }
