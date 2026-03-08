@@ -71,7 +71,7 @@ export default function Whistleblower() {
 
     const uploadToPinata = async (fileToUpload: File) => {
         const url = `https://api.pinata.cloud/pinning/pinFileToIPFS`;
-        let data = new FormData();
+        const data = new FormData();
         data.append('file', fileToUpload);
         const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
         const pinataSecretApiKey = process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY;
