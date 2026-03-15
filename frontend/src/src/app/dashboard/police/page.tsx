@@ -91,6 +91,16 @@ export default function PoliceDashboard() {
     const [appendFiles, setAppendFiles] = useState<File[]>([]);
     const [isAppending, setIsAppending] = useState(false);
 
+    // Missing Original/Added States
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [tipHash, setTipHash] = useState("");
+    const [statusMessage, setStatusMessage] = useState("");
+    const [isUploading, setIsUploading] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanReports, setScanReports] = useState<any[]>([]);
+    const [allTips, setAllTips] = useState<any[]>([]);
+    const [activeTab, setActiveTab] = useState("new_case");
+
     // Refresh data
     const handleRefresh = async () => {
         setIsRefreshing(true);
