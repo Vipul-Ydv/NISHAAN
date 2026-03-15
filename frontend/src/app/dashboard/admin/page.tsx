@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
 import {
     Loader2, Users, FileStack, Activity, Check, X,
-    ArrowRight, Database, ShieldAlert, RefreshCw, Home
+    ArrowRight, Database, ShieldAlert, ShieldCheck, RefreshCw, Home
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
@@ -185,11 +185,11 @@ export default function AdminDashboard() {
         <div className="min-h-screen text-black selection:bg-black selection:text-white font-sans overflow-x-hidden">
             <ThreeBackground />
 
-            <main className="relative z-10 max-w-7xl mx-auto pt-32 pb-20 px-8">
-                <div className="flex flex-col lg:flex-row gap-16">
+            <main className="relative z-10 max-w-7xl mx-auto pt-24 pb-20 px-8">
+                <div className="flex flex-col lg:flex-row gap-12">
 
                     {/* Sidebar Navigation */}
-                    <aside className="lg:w-80 space-y-12">
+                    <aside className="lg:w-80 space-y-8">
                         <div className="border-l-[10px] border-black pl-8 py-2">
                             <h1 className="text-6xl font-[1000] tracking-tighter uppercase leading-none italic">NISHAAN</h1>
                             <div className="bg-black text-white inline-block px-3 py-1 mt-4 text-[10px] font-mono font-black uppercase tracking-[0.3em]">
@@ -201,6 +201,16 @@ export default function AdminDashboard() {
                             <Home size={20} strokeWidth={3} /> Return to Home
                         </button>
 
+                        <div className="border-[4px] border-black bg-white p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                            <div className="flex items-center gap-3 mb-4">
+                                <ShieldCheck size={20} strokeWidth={3} />
+                                <span className="font-black uppercase text-xs tracking-tighter">Admin Wallet ID</span>
+                            </div>
+                            <p className="font-mono text-[10px] text-blue-700 break-all p-2">
+                                {account}
+                            </p>
+                        </div>
+
                         <nav className="flex flex-col border-[4px] border-black bg-white shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
                             {[
                                 { id: "pending", label: "Registration Requests", icon: Users, count: pendingUsers.filter((u: any) => u.status === 0).length },
@@ -210,23 +220,27 @@ export default function AdminDashboard() {
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
-                                    className={`group flex items - center justify - between p - 6 transition - all border - b - [4px] border - black last: border - 0 ${activeTab === tab.id ? "bg-zinc-100 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)]" : "hover:bg-zinc-50 text-black"
-                                        } `}
+                                    className={`group flex items-center justify-between p-6 transition-all border-b-[4px] border-black last:border-0 ${activeTab === tab.id ? "bg-zinc-100 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)]" : "hover:bg-zinc-50 text-black"
+                                        }`}
                                 >
                                     <div className="flex items-center gap-4">
                                         <tab.icon size={20} strokeWidth={3} className={activeTab === tab.id ? "text-blue-600" : ""} />
                                         <span className="font-[900] uppercase text-sm tracking-tighter">{tab.label}</span>
                                     </div>
                                     {tab.count !== undefined && tab.count > 0 ? (
-                                        <span className={`px - 2 py - 1 font - mono text - xs font - black ${activeTab === tab.id ? "bg-blue-600 text-white" : "bg-black text-white"} `}>
+                                        <span className={`px-2 py-1 font-mono text-xs font-black ${activeTab === tab.id ? "bg-blue-600 text-white" : "bg-black text-white"}`}>
                                             {tab.count}
                                         </span>
                                     ) : <ArrowRight size={16} />}
                                 </button>
                             ))}
-
-
                         </nav>
+
+                        <div className="hidden lg:block p-6 border-[4px] border-dashed border-black/70 text-black/70">
+                            <p className="text-[10px] font-mono leading-relaxed uppercase">
+                                Warning: All administrative actions are cryptographically signed and permanently recorded on the blockchain. Unauthorized access attempts are logged and prosecuted.
+                            </p>
+                        </div>
                     </aside>
 
                     {/* Content Area */}
@@ -339,10 +353,10 @@ export default function AdminDashboard() {
                                                                 <td className="px-4 py-4 border-r border-black/10 font-bold">{ev.officer}</td>
                                                                 <td className="px-4 py-4 border-r border-black/10 text-zinc-600">{ev.type}</td>
                                                                 <td className="px-4 py-4 border-r border-black/10">
-                                                                    <span className={`px - 2 py - 1 font - black uppercase ${ev.status === 2 ? 'bg-green-100 text-green-700' :
+                                                                    <span className={`px-2 py-1 font-black uppercase ${ev.status === 2 ? 'bg-green-100 text-green-700' :
                                                                         ev.status === 1 ? 'bg-yellow-100 text-yellow-700' :
                                                                             'bg-blue-100 text-blue-700'
-                                                                        } `}>
+                                                                        }`}>
                                                                         {ev.status === 2 ? 'Verified' : ev.status === 1 ? 'Reviewing' : 'Logged'}
                                                                     </span>
                                                                 </td>
