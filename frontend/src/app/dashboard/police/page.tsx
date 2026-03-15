@@ -6,7 +6,7 @@ import { useWeb3 } from "../../../context/Web3Context";
 import {
     UploadCloud, ShieldCheck, Loader2, File as FileIcon,
     Trash2, Gavel, Lock, Database, ChevronDown, ArrowRight,
-    EyeOff, RefreshCw, Home
+    EyeOff, RefreshCw, Home, FileStack, CheckCircle, FileWarning
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as THREE from "three";
@@ -85,16 +85,21 @@ export default function PoliceDashboard() {
     const [description, setDescription] = useState("");
     const [files, setFiles] = useState<File[]>([]);
 
-    // Auth & Whistleblower Additions
-    const [activeTab, setActiveTab] = useState("new_case");
-    const [allTips, setAllTips] = useState<any[]>([]);
-    const [tipHash, setTipHash] = useState("");
+    // Case History Additions
+    const [allEvidence, setAllEvidence] = useState<any[]>([]);
+    const [expandedEvidence, setExpandedEvidence] = useState<string | null>(null);
+    const [appendFiles, setAppendFiles] = useState<File[]>([]);
+    const [isAppending, setIsAppending] = useState(false);
 
+    // Missing Original/Added States
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [tipHash, setTipHash] = useState("");
+    const [statusMessage, setStatusMessage] = useState("");
     const [isUploading, setIsUploading] = useState(false);
     const [isScanning, setIsScanning] = useState(false);
     const [scanReports, setScanReports] = useState<any[]>([]);
-    const [statusMessage, setStatusMessage] = useState("");
-    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [allTips, setAllTips] = useState<any[]>([]);
+    const [activeTab, setActiveTab] = useState("new_case");
 
     // Refresh data
     const handleRefresh = async () => {
@@ -109,8 +114,36 @@ export default function PoliceDashboard() {
         setIsUploading(false);
         setIsScanning(false);
         setScanReports([]);
-        await fetchTips();
+        setAppendFiles([]);
+        setIsAppending(false);
+        await Promise.all([fetchTips(), fetchAllEvidence()]);
         setTimeout(() => setIsRefreshing(false), 500);
+    };
+
+    const fetchAllEvidence = async () => {
+        if (!contract) return;
+        try {
+            const evidenceArr = [];
+            const count = await contract.getEvidenceCount();
+            for (let i = 0; i < Number(count); i++) {
+                const id = await contract.evidenceIds(i);
+                const data = await contract.getEvidenceData(id);
+                evidenceArr.push({
+                    id,
+                    ipfsHashes: data[0] || [],
+                    caseNumber: data[1],
+                    location: data[2],
+                    crimeDescription: data[3],
+                    fileTypes: data[4] || [],
+                    officerName: data[5],
+                    timestamp: Number(data[6]),
+                    status: Number(data[7]),
+                });
+            }
+            setAllEvidence(evidenceArr.reverse());
+        } catch (err) {
+            console.error("Error fetching evidence", err);
+        }
     };
 
     const fetchTips = async () => {
@@ -135,6 +168,7 @@ export default function PoliceDashboard() {
                 router.push("/login");
             } else if (isApproved) {
                 fetchTips();
+                fetchAllEvidence();
             }
         }
     }, [account, role, status, isApproved, isLoading, router, contract]);
@@ -173,6 +207,42 @@ export default function PoliceDashboard() {
 
         const responseData = await res.json();
         return responseData.IpfsHash;
+    };
+
+    // Append Files
+    const handleAppendFiles = async (e: React.FormEvent, targetEvidenceId: string) => {
+        e.preventDefault();
+        if (appendFiles.length === 0 || !contract) return;
+
+        setIsAppending(true);
+        setStatusMessage("Uploading new evidence files to IPFS...");
+        const newIpfsHashes: string[] = [];
+        const newFileTypes: string[] = [];
+
+        try {
+            for (let i = 0; i < appendFiles.length; i++) {
+                const hash = await uploadToPinata(appendFiles[i]);
+                newIpfsHashes.push(hash);
+                let typeStr = appendFiles[i].type || "application/octet-stream";
+                newFileTypes.push(typeStr);
+            }
+
+            setStatusMessage("Files uploaded. Appending to blockchain record...");
+            const tx = await contract.appendEvidence(targetEvidenceId, newIpfsHashes, newFileTypes);
+            await tx.wait();
+
+            setStatusMessage("✅ New evidence successfully appended!");
+            setAppendFiles([]);
+            setExpandedEvidence(null);
+            fetchAllEvidence();
+
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`❌ Error appending: ${err.message}`);
+        } finally {
+            setIsAppending(false);
+        }
     };
 
     // Submit
@@ -361,6 +431,7 @@ export default function PoliceDashboard() {
                         <nav className="flex flex-col border-[4px] border-black bg-white shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
                             {[
                                 { id: "new_case", label: "New Case Entry", icon: ShieldCheck },
+                                { id: "history", label: "Case History", icon: FileStack },
                                 { id: "tips", label: "Anonymous Drops", icon: EyeOff, count: allTips.length }
                             ].map((tab) => (
                                 <button
@@ -617,6 +688,138 @@ export default function PoliceDashboard() {
                                                                 <Gavel size={18} /> Convert to Official Evidence
                                                             </button>
                                                         </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* CASE HISTORY TAB */}
+                                {activeTab === "history" && (
+                                    <div>
+                                        <div className="flex items-center gap-4 mb-8 pb-4 inline-flex">
+                                            <button onClick={handleRefresh} disabled={isRefreshing} className="p-2.5 bg-black text-white hover:bg-zinc-800 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.5)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 disabled:opacity-50 border-[3px] border-black">
+                                                <RefreshCw size={22} strokeWidth={3} className={isRefreshing ? 'animate-spin' : ''} />
+                                            </button>
+                                            <h2 className="text-3xl font-[1000] uppercase tracking-tighter flex items-center gap-3">
+                                                Case History <FileStack size={32} />
+                                            </h2>
+                                        </div>
+                                        
+                                        {allEvidence.length === 0 ? (
+                                            <div className="flex flex-col items-center justify-center h-80 border-[4px] border-dashed border-black/20 bg-zinc-50 p-12 text-center">
+                                                <Database size={40} className="mb-4 text-black/40" />
+                                                <h3 className="text-2xl font-black uppercase tracking-tighter text-black/60">No Cases Found</h3>
+                                                <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-zinc-400 mt-2 max-w-xs leading-relaxed">
+                                                    You haven't submitted any evidence to the blockchain yet.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-6">
+                                                {allEvidence.map((evidence, i) => (
+                                                    <div key={i} className={`border-[4px] border-black transition-all ${expandedEvidence === evidence.id ? "bg-zinc-50 shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]" : "bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:translate-x-1 hover:translate-y-1 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"}`}>
+                                                        {/* Header summary */}
+                                                        <div 
+                                                            className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 cursor-pointer"
+                                                            onClick={() => setExpandedEvidence(expandedEvidence === evidence.id ? null : evidence.id)}
+                                                        >
+                                                            <div className="flex flex-col gap-2">
+                                                                <div className="flex items-center gap-3">
+                                                                    <span className="font-black text-xl uppercase tracking-tighter">{evidence.id}</span>
+                                                                    <span className="bg-black text-white px-2 py-0.5 font-mono text-[9px] font-black uppercase">
+                                                                        {evidence.caseNumber}
+                                                                    </span>
+                                                                </div>
+                                                                <span className="text-zinc-500 font-mono text-[10px] uppercase font-bold">
+                                                                    {new Date(evidence.timestamp * 1000).toLocaleString()} • {evidence.ipfsHashes.length} File(s)
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex items-center gap-4 mt-4 sm:mt-0">
+                                                                <div className={`px-4 py-1.5 font-black uppercase text-xs tracking-widest border-[3px]
+                                                                    ${evidence.status === 0 ? 'bg-blue-50 border-blue-600 text-blue-600' :
+                                                                    evidence.status === 1 ? 'bg-yellow-50 border-yellow-600 text-yellow-600' :
+                                                                    evidence.status === 2 ? 'bg-green-50 border-green-600 text-green-600' :
+                                                                    'bg-zinc-100 border-zinc-600 text-zinc-600'}`}
+                                                                >
+                                                                    {evidence.status === 0 ? 'Submitted' :
+                                                                     evidence.status === 1 ? 'Under Review' :
+                                                                     evidence.status === 2 ? 'Verified' : 'Archived'}
+                                                                </div>
+                                                                <ChevronDown size={20} className={`transform transition-transform ${expandedEvidence === evidence.id ? "rotate-180" : ""}`} />
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Expanded Details */}
+                                                        {expandedEvidence === evidence.id && (
+                                                            <div className="p-6 border-t-[4px] border-black bg-white">
+                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                                                                    <div className="space-y-4">
+                                                                        <div>
+                                                                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Location</p>
+                                                                            <p className="font-black uppercase">{evidence.location}</p>
+                                                                        </div>
+                                                                        <div>
+                                                                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Description</p>
+                                                                            <p className="font-medium text-sm text-zinc-700 italic border-l-[3px] border-black pl-3 py-1">"{evidence.crimeDescription}"</p>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="space-y-2">
+                                                                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Attached Files</p>
+                                                                        <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-2">
+                                                                            {evidence.ipfsHashes.map((hash: string, fileIdx: number) => (
+                                                                                <a
+                                                                                    key={hash}
+                                                                                    href={`https://ipfs.io/ipfs/${hash}`}
+                                                                                    target="_blank" rel="noreferrer"
+                                                                                    className="flex items-center gap-3 p-3 border-[2px] border-black hover:bg-zinc-100 transition-all bg-zinc-50"
+                                                                                >
+                                                                                    <FileIcon size={16} className="shrink-0" />
+                                                                                    <div className="min-w-0 flex-1">
+                                                                                        <p className="font-black uppercase text-[10px] truncate">File {fileIdx + 1}</p>
+                                                                                        <p className="text-[8px] font-mono text-zinc-500 uppercase truncate">{evidence.fileTypes[fileIdx] || "Unknown"}</p>
+                                                                                    </div>
+                                                                                    <ArrowRight size={14} className="text-zinc-400" />
+                                                                                </a>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* Append Section */}
+                                                                <div className="border-[4px] border-dashed border-black/40 p-6 bg-zinc-50 mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-4 flex items-center gap-2">
+                                                                        <UploadCloud size={16} /> Append Additional Evidence
+                                                                    </h4>
+                                                                    <form onSubmit={(e) => handleAppendFiles(e, evidence.id)} className="flex flex-col sm:flex-row gap-4">
+                                                                        <div className="flex-1 border-[3px] border-black bg-white flex items-center justify-between px-4 py-2 hover:bg-zinc-100 transition-colors cursor-pointer relative">
+                                                                            <input
+                                                                                type="file" multiple required
+                                                                                onChange={(e) => setAppendFiles(e.target.files ? Array.from(e.target.files) : [])}
+                                                                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                                                            />
+                                                                            <span className="font-mono text-xs font-bold uppercase truncate max-w-[200px]">
+                                                                                {appendFiles.length > 0 ? `${appendFiles.length} files selected` : "Select files to append"}
+                                                                            </span>
+                                                                            <FileStack size={16} />
+                                                                        </div>
+                                                                        <button
+                                                                            type="submit"
+                                                                            disabled={isAppending || appendFiles.length === 0}
+                                                                            className="px-6 py-3 bg-black text-white font-black uppercase text-xs tracking-widest hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0 border-[3px] border-black"
+                                                                        >
+                                                                            {isAppending ? <><Loader2 size={16} className="animate-spin" /> Uploading...</> : 'Append Files'}
+                                                                        </button>
+                                                                    </form>
+                                                                    
+                                                                    {statusMessage && expandedEvidence === evidence.id && (
+                                                                        <p className={`mt-4 text-[10px] font-mono font-bold uppercase ${statusMessage.includes('❌') ? 'text-red-600' : 'text-blue-600'}`}>
+                                                                            {statusMessage}
+                                                                        </p>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 ))}
                                             </div>

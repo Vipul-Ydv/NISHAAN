@@ -73,6 +73,37 @@ export const CONTRACT_ABI = [
             },
             {
                 "indexed": false,
+                "internalType": "uint256",
+                "name": "newFileCount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "address",
+                "name": "appendedBy",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "timestamp",
+                "type": "uint256"
+            }
+        ],
+        "name": "EvidenceAppended",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "evidenceId",
+                "type": "string"
+            },
+            {
+                "indexed": false,
                 "internalType": "enum EvidenceManagement.EvidenceStatus",
                 "name": "newStatus",
                 "type": "uint8"
@@ -270,6 +301,29 @@ export const CONTRACT_ABI = [
             }
         ],
         "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "_evidenceId",
+                "type": "string"
+            },
+            {
+                "internalType": "string[]",
+                "name": "_newIpfsHashes",
+                "type": "string[]"
+            },
+            {
+                "internalType": "string[]",
+                "name": "_newFileTypes",
+                "type": "string[]"
+            }
+        ],
+        "name": "appendEvidence",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
