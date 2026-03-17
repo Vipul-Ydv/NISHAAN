@@ -601,7 +601,7 @@ export default function PoliceDashboard() {
                                                         initial={{ opacity: 0, x: -10 }}
                                                         animate={{ opacity: 1, x: 0 }}
                                                         exit={{ opacity: 0 }}
-                                                        className={`p-5 border-[4px] font-mono text-[10px] font-black uppercase leading-tight ${statusMessage.includes('❌')
+                                                        className={`p-5 border-[4px] font-mono text-[10px] font-black uppercase leading-tight break-all ${statusMessage.includes('❌')
                                                             ? 'bg-red-50 border-red-600 text-red-600'
                                                             : statusMessage.includes('✅')
                                                                 ? 'bg-green-50 border-green-600 text-green-600'
@@ -813,7 +813,7 @@ export default function PoliceDashboard() {
                                                                     </form>
                                                                     
                                                                     {statusMessage && expandedEvidence === evidence.id && (
-                                                                        <p className={`mt-4 text-[10px] font-mono font-bold uppercase ${statusMessage.includes('❌') ? 'text-red-600' : 'text-blue-600'}`}>
+                                                                         <p className={`mt-4 text-[10px] font-mono font-bold uppercase break-all ${statusMessage.includes('❌') ? 'text-red-600' : 'text-blue-600'}`}>
                                                                             {statusMessage}
                                                                         </p>
                                                                     )}
