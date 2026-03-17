@@ -62,6 +62,7 @@ contract EvidenceManagement {
     event UserApproved(address userAddress, string role, address approvedBy);
     event UserRejected(address userAddress, address rejectedBy);
     event TipSubmitted(uint256 tipId, address submitter, uint256 timestamp);
+    event EvidenceAppended(string evidenceId, uint256 newFileCount, address appendedBy, uint256 timestamp);
 
     // --- Modifiers ---
     modifier onlyAdmin() {
@@ -184,6 +185,32 @@ contract EvidenceManagement {
         }));
 
         emit EvidenceAdded(_evidenceId, _ipfsHashes.length, userNames[msg.sender], block.timestamp);
+    }
+
+    function appendEvidence(
+        string memory _evidenceId,
+        string[] memory _newIpfsHashes,
+        string[] memory _newFileTypes
+    ) public onlyPolice onlyApproved {
+        require(evidenceRecords[_evidenceId].exists, "Evidence does not exist");
+        
+        Evidence storage evidence = evidenceRecords[_evidenceId];
+        
+        for (uint i = 0; i < _newIpfsHashes.length; i++) {
+            evidence.ipfsHashes.push(_newIpfsHashes[i]);
+            evidence.fileTypes.push(_newFileTypes[i]);
+        }
+        
+        // Record in Chain of Custody
+        chainOfCustody[_evidenceId].push(AccessRecord({
+            accessedBy: msg.sender,
+            accessorName: userNames[msg.sender],
+            accessorRole: userRoles[msg.sender],
+            timestamp: block.timestamp,
+            action: "AppendedFiles"
+        }));
+        
+        emit EvidenceAppended(_evidenceId, _newIpfsHashes.length, msg.sender, block.timestamp);
     }
 
     function getEvidence(string memory _evidenceId) public onlyApproved returns (

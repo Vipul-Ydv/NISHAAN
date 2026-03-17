@@ -4,7 +4,15 @@ import "dotenv/config";
 /** @type import('hardhat/config').HardhatUserConfig */
 export default {
     // Using a recent stable 0.8.x version
-    solidity: "0.8.28",
+    solidity: {
+        version: "0.8.28",
+        settings: {
+            optimizer: {
+                enabled: true,
+                runs: 200,
+            },
+        },
+    },
     networks: {
         // Local hardhat node configuration
         localhost: {
