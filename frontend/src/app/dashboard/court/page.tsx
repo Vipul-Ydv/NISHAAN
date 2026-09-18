@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
+import { ensureKeyRegistered, openEncryptedFile, downloadBlob } from "../../../utils/evidenceCrypto";
 import {
     Scale, Loader2, Search, CheckCircle, FileWarning,
     Eye, Gavel, ShieldCheck, Fingerprint, Database, Home
@@ -87,7 +88,7 @@ interface CaseRecord {
 }
 
 export default function CourtDashboard() {
-    const { account, role, status, isApproved, contract, isLoading } = useWeb3();
+    const { account, role, status, isApproved, contract, isLoading, provider } = useWeb3();
     const router = useRouter();
 
     const [evidenceId, setEvidenceId] = useState("");
@@ -101,6 +102,11 @@ export default function CourtDashboard() {
     const [searchQuery, setSearchQuery] = useState("");
     const [isIndexing, setIsIndexing] = useState(false);
     const [versions, setVersions] = useState<any[]>([]);
+
+    // Decryption: which file is being opened, and whether a key was granted.
+    const [decryptingCid, setDecryptingCid] = useState<string | null>(null);
+    const [hasKey, setHasKey] = useState(false);
+    const [isPublishingKey, setIsPublishingKey] = useState(false);
     useEffect(() => {
         if (!isLoading) {
             if (!account || (role !== "Court" && status !== 2)) {
@@ -255,12 +261,47 @@ export default function CourtDashboard() {
             });
 
             await loadVersions(id);
+            setHasKey(await contract.hasDecryptionAccess(id, account));
             setStatusMessage("");
         } catch (err: any) {
             console.error(err);
             setStatusMessage("\u274c Error fetching evidence or logging access.");
         } finally {
             setIsSearching(false);
+        }
+    };
+
+    /** Publishes this judge's encryption public key so police can seal keys to it. */
+    const publishEncryptionKey = async () => {
+        if (!contract || !provider || !account) return;
+        setIsPublishingKey(true);
+        try {
+            await ensureKeyRegistered(contract, provider, account, setStatusMessage);
+            setStatusMessage("\u2705 Encryption key published. Police can now grant you access.");
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c Could not publish encryption key: ${err.message}`);
+        } finally {
+            setIsPublishingKey(false);
+        }
+    };
+
+    /** Fetches the ciphertext, unwraps the granted key, and decrypts in-browser. */
+    const openFile = async (cid: string, mimeType: string, label: string) => {
+        if (!contract || !provider || !account) return;
+        setDecryptingCid(cid);
+        setStatusMessage("Fetching encrypted file and decrypting locally...");
+        try {
+            const blob = await openEncryptedFile(contract, provider, account, evidenceId, cid, mimeType);
+            downloadBlob(blob, label);
+            setStatusMessage("\u2705 Decrypted. The file was opened in your browser, never on a server.");
+            setTimeout(() => setStatusMessage(""), 6000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c ${err.message}`);
+        } finally {
+            setDecryptingCid(null);
         }
     };
 
@@ -444,10 +485,28 @@ export default function CourtDashboard() {
                             </div>
 
                             {statusMessage && (
-                                <div className={`mt-6 p-4 border-[3px] border-black font-mono text-[10px] font-black uppercase tracking-wider ${statusMessage.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                <div className={`mt-6 p-4 border-[3px] border-black font-mono text-[10px] font-black uppercase tracking-wider break-all ${statusMessage.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
                                     {statusMessage}
                                 </div>
                             )}
+
+                            {/* Evidence is sealed to a published key, so a judge
+                                must publish one before police can grant access. */}
+                            <div className="mt-6 border-[3px] border-dashed border-black/40 p-5 flex flex-col sm:flex-row sm:items-center gap-4 justify-between">
+                                <div>
+                                    <p className="text-[10px] font-black uppercase tracking-[0.25em] mb-1">Encryption Key</p>
+                                    <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500">
+                                        Publish yours so police can seal evidence you alone can open.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={publishEncryptionKey}
+                                    disabled={isPublishingKey}
+                                    className="shrink-0 border-[3px] border-black px-5 py-3 font-black uppercase text-[10px] tracking-widest hover:bg-black hover:text-white transition-colors disabled:opacity-50 flex items-center gap-2"
+                                >
+                                    {isPublishingKey ? <><Loader2 size={14} className="animate-spin" /> Publishing...</> : 'Publish Key'}
+                                </button>
+                            </div>
                         </div>
 
                         {/* Evidence Result Display */}
@@ -536,13 +595,21 @@ export default function CourtDashboard() {
                                                             <p className="font-mono text-[9px] font-black uppercase tracking-widest text-zinc-500">
                                                                 By {version.authorName}
                                                             </p>
-                                                            <a
-                                                                href={`https://ipfs.io/ipfs/${version.ipfsHash}`}
-                                                                target="_blank" rel="noreferrer"
-                                                                className="inline-flex items-center gap-2 border-[3px] border-black px-3 py-1 text-[10px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors"
+                                                            <button
+                                                                onClick={() => openFile(
+                                                                    version.ipfsHash,
+                                                                    version.fileType,
+                                                                    `${evidenceId}-v${version.index + 1}`
+                                                                )}
+                                                                disabled={decryptingCid !== null || !hasKey}
+                                                                title={hasKey ? "Decrypt and open this version" : "No decryption key has been granted to you"}
+                                                                className="inline-flex items-center gap-2 border-[3px] border-black px-3 py-1 text-[10px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-black"
                                                             >
-                                                                <Eye size={14} strokeWidth={3} /> Open v{version.index + 1}
-                                                            </a>
+                                                                {decryptingCid === version.ipfsHash
+                                                                    ? <Loader2 size={14} className="animate-spin" />
+                                                                    : <Eye size={14} strokeWidth={3} />}
+                                                                {hasKey ? `Decrypt v${version.index + 1}` : `v${version.index + 1} Locked`}
+                                                            </button>
                                                         </div>
                                                     </li>
                                                 ))}
@@ -557,18 +624,23 @@ export default function CourtDashboard() {
                                             {evidenceData.ipfsHashes && evidenceData.ipfsHashes.map((hash: string, idx: number) => {
                                                 const fileType = evidenceData.fileTypes[idx] || "Unknown";
                                                 return (
-                                                    <a
+                                                    <button
                                                         key={hash}
-                                                        href={`https://ipfs.io/ipfs/${hash}`}
-                                                        target="_blank" rel="noreferrer"
-                                                        className="flex items-center gap-3 p-4 border-[4px] border-black hover:bg-zinc-100 transition-all bg-white"
+                                                        onClick={() => openFile(hash, fileType, `${evidenceId}-file-${idx + 1}`)}
+                                                        disabled={decryptingCid !== null || !hasKey}
+                                                        title={hasKey ? "Decrypt and open" : "No decryption key has been granted to you for this record"}
+                                                        className="flex items-center gap-3 p-4 border-[4px] border-black hover:bg-zinc-100 transition-all bg-white text-left disabled:opacity-40 disabled:hover:bg-white"
                                                     >
-                                                        <Eye size={20} strokeWidth={3} className="shrink-0" />
+                                                        {decryptingCid === hash
+                                                            ? <Loader2 size={20} className="animate-spin shrink-0" />
+                                                            : <Eye size={20} strokeWidth={3} className="shrink-0" />}
                                                         <div className="min-w-0">
-                                                            <p className="font-black uppercase text-xs truncate">File {idx + 1}</p>
+                                                            <p className="font-black uppercase text-xs truncate">
+                                                                {hasKey ? `Decrypt File ${idx + 1}` : `File ${idx + 1} - Locked`}
+                                                            </p>
                                                             <p className="text-[9px] font-mono text-zinc-500 uppercase truncate">{fileType}</p>
                                                         </div>
-                                                    </a>
+                                                    </button>
                                                 );
                                             })}
                                         </div>

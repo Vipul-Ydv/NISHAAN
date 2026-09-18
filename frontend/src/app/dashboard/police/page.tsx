@@ -3,6 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
+import { ensureKeyRegistered, sealFiles, grantAccess, listKeyHolders, getContentKeyFor } from "../../../utils/evidenceCrypto";
+import { encryptFile } from "../../../utils/crypto";
+import { openEncryptedFile, downloadBlob } from "../../../utils/evidenceCrypto";
 import {
     UploadCloud, ShieldCheck, Loader2, File as FileIcon,
     Trash2, Gavel, Lock, Database, ChevronDown, ArrowRight,
@@ -85,7 +88,7 @@ interface VersionEntry {
 }
 
 export default function PoliceDashboard() {
-    const { account, role, status, isApproved, contract, isLoading } = useWeb3();
+    const { account, role, status, isApproved, contract, isLoading, provider } = useWeb3();
     const router = useRouter();
 
     // Original State
@@ -106,6 +109,7 @@ export default function PoliceDashboard() {
     const [versionNote, setVersionNote] = useState("");
     const [isVersioning, setIsVersioning] = useState(false);
     const [caseVersions, setCaseVersions] = useState<Record<string, VersionEntry[]>>({});
+    const [decryptingCid, setDecryptingCid] = useState<string | null>(null);
 
     // Missing Original/Added States
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -211,6 +215,31 @@ export default function PoliceDashboard() {
         return responseData.IpfsHash;
     };
 
+    /** Fetches ciphertext from IPFS and decrypts it with this officer's key. */
+    const openFile = async (
+        targetEvidenceId: string,
+        cid: string,
+        mimeType: string,
+        label: string
+    ) => {
+        if (!contract || !provider || !account) return;
+        setDecryptingCid(cid);
+        setStatusMessage("Fetching encrypted file and decrypting locally...");
+        try {
+            const blob = await openEncryptedFile(
+                contract, provider, account, targetEvidenceId, cid, mimeType
+            );
+            downloadBlob(blob, label);
+            setStatusMessage("\u2705 Decrypted in your browser.");
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c ${err.message}`);
+        } finally {
+            setDecryptingCid(null);
+        }
+    };
+
     /** Reads the revision trail for one case so the panel can show it. */
     const loadVersionsFor = async (targetEvidenceId: string) => {
         if (!contract) return;
@@ -246,11 +275,21 @@ export default function PoliceDashboard() {
         if (!versionFile || !contract) return;
 
         setIsVersioning(true);
-        setStatusMessage("Uploading revised document to IPFS...");
+        setStatusMessage("Preparing to encrypt the revised document...");
 
         try {
-            const hash = await uploadToPinata(versionFile);
+            if (!provider || !account) throw new Error("Wallet is not connected.");
+
+            // Same content key as the rest of the record, so existing recipients
+            // can open the revision without a new grant.
+            setStatusMessage("Unwrapping this record's key to encrypt the revision...");
+            const contentKey = await getContentKeyFor(contract, provider, account, targetEvidenceId);
+
             const fileType = versionFile.type || "application/octet-stream";
+            const encrypted = await encryptFile(versionFile, contentKey);
+            const hash = await uploadToPinata(
+                new File([encrypted], `${versionFile.name}.enc`, { type: "application/octet-stream" })
+            );
 
             setStatusMessage("Document pinned. Anchoring revision on the blockchain...");
             const tx = await contract.addDocumentVersion(targetEvidenceId, hash, fileType, versionNote);
@@ -277,16 +316,27 @@ export default function PoliceDashboard() {
         if (appendFiles.length === 0 || !contract) return;
 
         setIsAppending(true);
-        setStatusMessage("Uploading new evidence files to IPFS...");
+        setStatusMessage("Preparing to encrypt the new evidence files...");
         const newIpfsHashes: string[] = [];
         const newFileTypes: string[] = [];
 
         try {
+            if (!provider || !account) throw new Error("Wallet is not connected.");
+
+            // Reuse the record's existing content key, otherwise anyone already
+            // granted access would be unable to read the newly added files.
+            setStatusMessage("Unwrapping this record's key to encrypt the new files...");
+            const contentKey = await getContentKeyFor(contract, provider, account, targetEvidenceId);
+
             for (let i = 0; i < appendFiles.length; i++) {
-                const hash = await uploadToPinata(appendFiles[i]);
+                const file = appendFiles[i];
+                setStatusMessage(`Encrypting and uploading file ${i + 1} of ${appendFiles.length}...`);
+                const encrypted = await encryptFile(file, contentKey);
+                const hash = await uploadToPinata(
+                    new File([encrypted], `${file.name}.enc`, { type: "application/octet-stream" })
+                );
                 newIpfsHashes.push(hash);
-                let typeStr = appendFiles[i].type || "application/octet-stream";
-                newFileTypes.push(typeStr);
+                newFileTypes.push(file.type || "application/octet-stream");
             }
 
             setStatusMessage("Files uploaded. Appending to blockchain record...");
@@ -318,6 +368,9 @@ export default function PoliceDashboard() {
         const ipfsHashes: string[] = [];
         const fileTypes: string[] = [];
         let forgeryDetected = false;
+        // Set when files are encrypted; stays null for a tip conversion, whose
+        // file was pinned by the whistleblower and is not ours to encrypt.
+        let contentKeyRaw: Uint8Array | null = null;
 
         if (!tipHash) {
             // --- AI SCANNING PHASE ---
@@ -374,18 +427,34 @@ export default function PoliceDashboard() {
                 return; // Abort the upload
             }
 
-            // --- IPFS PINNING ---
+            // --- ENCRYPTION ---
             setIsUploading(true);
-            setStatusMessage("Files verified. Pinning to IPFS Network...");
+            try {
+                if (!provider || !account) throw new Error("Wallet is not connected.");
+                await ensureKeyRegistered(contract, provider, account, setStatusMessage);
 
-            for (let i = 0; i < files.length; i++) {
-                setStatusMessage(`Uploading file ${i + 1} of ${files.length}...`);
-                const hash = await uploadToPinata(files[i]);
-                ipfsHashes.push(hash);
+                setStatusMessage("Encrypting files in your browser...");
+                const sealed = await sealFiles(files);
+                contentKeyRaw = sealed.contentKeyRaw;
 
-                let typeStr = files[i].type;
-                if (!typeStr) typeStr = "application/octet-stream";
-                fileTypes.push(typeStr);
+                // --- IPFS PINNING (ciphertext only) ---
+                for (let i = 0; i < sealed.uploads.length; i++) {
+                    setStatusMessage(`Uploading encrypted file ${i + 1} of ${sealed.uploads.length}...`);
+                    const upload = sealed.uploads[i];
+                    // Pinata receives ciphertext. The original name and type stay
+                    // local; only the type is anchored, so the court knows how to
+                    // open the file once it has decrypted it.
+                    const encryptedFile = new File([upload.blob], `${upload.originalName}.enc`, {
+                        type: "application/octet-stream",
+                    });
+                    ipfsHashes.push(await uploadToPinata(encryptedFile));
+                    fileTypes.push(upload.originalType);
+                }
+            } catch (err: any) {
+                console.error(err);
+                setStatusMessage(`❌ Encryption failed: ${err.message}`);
+                setIsUploading(false);
+                return;
             }
         } else {
             // Using tip hash directly without scanning
@@ -409,7 +478,26 @@ export default function PoliceDashboard() {
 
             setStatusMessage("Transaction submitted. Waiting for blockchain confirmation...");
             await tx.wait();
-            setStatusMessage("✅ Evidence successfully secured on the blockchain!");
+
+            // Seal the content key to everyone who must read the record. The
+            // record has to exist first: grantDecryptionKey requires it.
+            if (contentKeyRaw) {
+                setStatusMessage("Sealing decryption keys for the court...");
+                const courts = await listKeyHolders(contract, "Court");
+                const self = account ? [{ address: account, name: "You", role: "Police" }] : [];
+                const granted = await grantAccess(
+                    contract, evidenceId, contentKeyRaw, [...self, ...courts], setStatusMessage
+                );
+
+                const courtNames = granted.filter((g) => g.role === "Court").map((g) => g.name);
+                setStatusMessage(
+                    courtNames.length > 0
+                        ? `✅ Encrypted and anchored. Readable by: ${courtNames.join(", ")}.`
+                        : "✅ Encrypted and anchored. No court has published an encryption key yet, so none can read it."
+                );
+            } else {
+                setStatusMessage("✅ Evidence successfully secured on the blockchain!");
+            }
 
             setTimeout(() => {
                 setEvidenceId("");
@@ -834,19 +922,26 @@ export default function PoliceDashboard() {
                                                                         <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Attached Files</p>
                                                                         <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-2">
                                                                             {evidence.ipfsHashes.map((hash: string, fileIdx: number) => (
-                                                                                <a
+                                                                                <button
                                                                                     key={hash}
-                                                                                    href={`https://ipfs.io/ipfs/${hash}`}
-                                                                                    target="_blank" rel="noreferrer"
-                                                                                    className="flex items-center gap-3 p-3 border-[2px] border-black hover:bg-zinc-100 transition-all bg-zinc-50"
+                                                                                    onClick={() => openFile(
+                                                                                        evidence.id,
+                                                                                        hash,
+                                                                                        evidence.fileTypes[fileIdx] || "application/octet-stream",
+                                                                                        `${evidence.id}-file-${fileIdx + 1}`
+                                                                                    )}
+                                                                                    disabled={decryptingCid !== null}
+                                                                                    className="flex items-center gap-3 p-3 border-[2px] border-black hover:bg-zinc-100 transition-all bg-zinc-50 text-left disabled:opacity-40"
                                                                                 >
-                                                                                    <FileIcon size={16} className="shrink-0" />
+                                                                                    {decryptingCid === hash
+                                                                                        ? <Loader2 size={16} className="animate-spin shrink-0" />
+                                                                                        : <FileIcon size={16} className="shrink-0" />}
                                                                                     <div className="min-w-0 flex-1">
-                                                                                        <p className="font-black uppercase text-[10px] truncate">File {fileIdx + 1}</p>
+                                                                                        <p className="font-black uppercase text-[10px] truncate">Decrypt File {fileIdx + 1}</p>
                                                                                         <p className="text-[8px] font-mono text-zinc-500 uppercase truncate">{evidence.fileTypes[fileIdx] || "Unknown"}</p>
                                                                                     </div>
                                                                                     <ArrowRight size={14} className="text-zinc-400" />
-                                                                                </a>
+                                                                                </button>
                                                                             ))}
                                                                         </div>
                                                                     </div>
@@ -880,13 +975,18 @@ export default function PoliceDashboard() {
                                                                                         <span className="font-mono text-[9px] font-black uppercase tracking-widest text-zinc-500">
                                                                                             By {version.authorName}
                                                                                         </span>
-                                                                                        <a
-                                                                                            href={`https://ipfs.io/ipfs/${version.ipfsHash}`}
-                                                                                            target="_blank" rel="noreferrer"
-                                                                                            className="border-[2px] border-black px-3 py-1 text-[9px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors"
+                                                                                        <button
+                                                                                            onClick={() => openFile(
+                                                                                                evidence.id,
+                                                                                                version.ipfsHash,
+                                                                                                version.fileType,
+                                                                                                `${evidence.id}-v${version.index + 1}`
+                                                                                            )}
+                                                                                            disabled={decryptingCid !== null}
+                                                                                            className="border-[2px] border-black px-3 py-1 text-[9px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors disabled:opacity-40"
                                                                                         >
-                                                                                            Open v{version.index + 1}
-                                                                                        </a>
+                                                                                            Decrypt v{version.index + 1}
+                                                                                        </button>
                                                                                     </div>
                                                                                 </li>
                                                                             ))}

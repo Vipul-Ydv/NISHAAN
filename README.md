@@ -9,10 +9,16 @@ file produces a different CID and no longer matches the on-chain record.
 
 ## 🌟 Key Features
 
-- **Tamper Evidence:** Files are pinned to IPFS via Pinata. The resulting CID and
-  the evidence metadata are written to an Ethereum smart contract. Because a CID
-  is derived from the file's content, a modified file cannot match the anchored
-  hash — alteration is detectable.
+- **End-to-End Encryption:** Evidence files are encrypted in the browser with a
+  per-record AES-256-GCM key before they are pinned. That content key is sealed
+  to each authorised reader's X25519 public key and stored on-chain. The pinning
+  service holds only ciphertext, the contract holds only sealed keys it cannot
+  open, and the admin - who governs who is approved - cannot read evidence.
+- **Tamper Evidence:** The CID of the encrypted file and the record metadata are
+  written to an Ethereum smart contract. Because a CID is derived from content, a
+  modified file cannot match the anchored hash. AES-GCM authenticates in
+  addition, so an altered byte fails to decrypt rather than decrypting to
+  plausible garbage.
 - **Role-Based Execution Policies:** Access control is enforced in the contract.
   Only approved **Police** accounts can submit or append evidence, only **Court**
   accounts can mark evidence Verified, and an **Admin** account provisions access.
@@ -32,11 +38,18 @@ file produces a different CID and no longer matches the on-chain record.
 These are current gaps, stated plainly so nobody mistakes the system for
 providing a guarantee it does not yet provide.
 
-- **Evidence files are not encrypted.** Files are pinned to IPFS as-is and the
-  court dashboard links them through a public IPFS gateway. Anyone who obtains a
-  CID can read the file contents. The contract provides *integrity and
-  auditability*, not *confidentiality*. Client-side encryption is not yet
-  implemented and is required before any real case data is used.
+- **Whistleblower tip files are not encrypted.** Tips are submitted by members
+  of the public, who have no published key to seal a file to and no account to
+  seal it for, so tip attachments are pinned as-is and remain readable to anyone
+  holding the CID. Only evidence records go through the encryption path below.
+- **Key derivation assumes deterministic signatures.** The encryption keypair is
+  re-derived from a wallet signature rather than stored. This relies on
+  deterministic ECDSA (RFC 6979), which MetaMask implements. A wallet that signs
+  the same message differently each time would derive a different key and be
+  unable to decrypt.
+- **A user must publish an encryption key before they can be granted access.** A
+  judge who has not clicked *Publish Key* cannot be sealed to, and police will be
+  told that no court can read the record.
 - **Tips are unlinked on-chain but not network-anonymous.** The contract stores
   and emits no submitter address, but the transaction's `from` address remains
   visible in the chain's public transaction history. A submitter who needs full
@@ -53,6 +66,24 @@ providing a guarantee it does not yet provide.
   on the server.
 
 ---
+
+## 🔐 How Encryption Works
+
+1. A user signs one fixed, app-specific message. The hashed signature seeds an
+   X25519 keypair, so the private key is never stored and can be re-derived on
+   any device. Only the public half is published on-chain.
+2. Submitting evidence generates a random AES-256-GCM content key. Every file in
+   the record is encrypted with it in the browser; only ciphertext reaches Pinata.
+3. The content key is sealed to each authorised reader's published key and stored
+   via `grantDecryptionKey`. Each grant appends an `AccessGranted` custody record.
+4. A reader fetches their sealed key with `getMyWrappedKey`, which is scoped to
+   `msg.sender`, opens it with their re-derived private key, and decrypts the
+   file locally.
+
+This deliberately avoids MetaMask's `eth_getEncryptionPublicKey` and
+`eth_decrypt`. Both were deprecated in July 2022, are MetaMask-only and are
+unsupported on hardware wallets, which makes them a poor foundation for the one
+feature the system's confidentiality depends on.
 
 ## 🏗️ Technology Stack
 
@@ -159,6 +190,7 @@ The app runs at [http://localhost:3000](http://localhost:3000).
 - `npm run build`: Builds for production.
 - `npm run start`: Runs the production build.
 - `npm run lint`: Runs ESLint.
+- `npm test`: Runs the encryption tests via Node's built-in test runner.
 
 ---
 
