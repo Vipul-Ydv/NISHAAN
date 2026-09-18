@@ -26,12 +26,19 @@ async function main() {
     console.log(`  police ${police.address}`);
     console.log(`  court  ${court.address}\n`);
 
-    // --- onboard ---
-    await (await contract.connect(police).registerUser("Insp. A. Rane", "Police")).wait();
-    await (await contract.connect(admin).approveUser(police.address)).wait();
-    await (await contract.connect(court).registerUser("Judge S. Menon", "Court")).wait();
-    await (await contract.connect(admin).approveUser(court.address)).wait();
-    console.log("Registered and approved: police, court");
+    // --- onboard (idempotent: the contract may already know these accounts) ---
+    async function onboard(signer, name, role) {
+        if (await contract.isUserRegistered(signer.address)) {
+            console.log(`Already registered: ${await contract.getUserName(signer.address)}`);
+            return;
+        }
+        await (await contract.connect(signer).registerUser(name, role)).wait();
+        await (await contract.connect(admin).approveUser(signer.address)).wait();
+        console.log(`Registered and approved: ${name}`);
+    }
+
+    await onboard(police, "Insp. A. Rane", "Police");
+    await onboard(court, "Judge S. Menon", "Court");
 
     // --- cases, worded so search has something to discriminate on ---
     const cases = [
@@ -70,6 +77,11 @@ async function main() {
     ];
 
     for (const c of cases) {
+        const existing = await contract.getEvidenceData(c.id);
+        if (existing.exists) {
+            console.log(`Skipped ${c.id} (already present)`);
+            continue;
+        }
         await (await contract.connect(police).addEvidence(
             c.id, c.hashes, c.caseNumber, c.location, c.description, c.types
         )).wait();
