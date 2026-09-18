@@ -3,6 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
+import { ensureKeyRegistered, sealFiles, grantAccess, listKeyHolders, getContentKeyFor } from "../../../utils/evidenceCrypto";
+import { encryptFile, exportContentKey } from "../../../utils/crypto";
+import { openEncryptedFile, downloadBlob } from "../../../utils/evidenceCrypto";
 import {
     UploadCloud, ShieldCheck, Loader2, File as FileIcon,
     Trash2, Gavel, Lock, Database, ChevronDown, ArrowRight,
@@ -74,8 +77,26 @@ function JusticeNetworkBackground() {
     return <div ref={containerRef} className="fixed inset-0 -z-10 bg-white" />;
 }
 
+/** A court account and whether it can already decrypt a given case. */
+interface GrantStatus {
+    address: string;
+    name: string;
+    role: string;
+    hasAccess: boolean;
+}
+
+/** One on-chain revision of a case document. */
+interface VersionEntry {
+    index: number;
+    ipfsHash: string;
+    fileType: string;
+    note: string;
+    authorName: string;
+    timestamp: number;
+}
+
 export default function PoliceDashboard() {
-    const { account, role, status, isApproved, contract, isLoading } = useWeb3();
+    const { account, role, status, isApproved, contract, isLoading, provider } = useWeb3();
     const router = useRouter();
 
     // Original State
@@ -90,6 +111,17 @@ export default function PoliceDashboard() {
     const [expandedEvidence, setExpandedEvidence] = useState<string | null>(null);
     const [appendFiles, setAppendFiles] = useState<File[]>([]);
     const [isAppending, setIsAppending] = useState(false);
+
+    // Document revisions, keyed by evidence id.
+    const [versionFile, setVersionFile] = useState<File | null>(null);
+    const [versionNote, setVersionNote] = useState("");
+    const [isVersioning, setIsVersioning] = useState(false);
+    const [caseVersions, setCaseVersions] = useState<Record<string, VersionEntry[]>>({});
+    const [decryptingCid, setDecryptingCid] = useState<string | null>(null);
+
+    // Who can currently decrypt each case, so access can be extended later.
+    const [caseGrants, setCaseGrants] = useState<Record<string, GrantStatus[]>>({});
+    const [isGranting, setIsGranting] = useState(false);
 
     // Missing Original/Added States
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -195,22 +227,180 @@ export default function PoliceDashboard() {
         return responseData.IpfsHash;
     };
 
+    /** Fetches ciphertext from IPFS and decrypts it with this officer's key. */
+    const openFile = async (
+        targetEvidenceId: string,
+        cid: string,
+        mimeType: string,
+        label: string
+    ) => {
+        if (!contract || !provider || !account) return;
+        setDecryptingCid(cid);
+        setStatusMessage("Fetching encrypted file and decrypting locally...");
+        try {
+            const blob = await openEncryptedFile(
+                contract, provider, account, targetEvidenceId, cid, mimeType
+            );
+            downloadBlob(blob, label);
+            setStatusMessage("\u2705 Decrypted in your browser.");
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c ${err.message}`);
+        } finally {
+            setDecryptingCid(null);
+        }
+    };
+
+    /** Lists courts with a published key and whether each can open this case. */
+    const loadGrantsFor = async (targetEvidenceId: string) => {
+        if (!contract) return;
+        try {
+            const courts = await listKeyHolders(contract, "Court");
+            const statuses: GrantStatus[] = [];
+            for (const court of courts) {
+                statuses.push({
+                    ...court,
+                    hasAccess: await contract.hasDecryptionAccess(targetEvidenceId, court.address),
+                });
+            }
+            setCaseGrants((prev) => ({ ...prev, [targetEvidenceId]: statuses }));
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    /**
+     * Extends decryption access on an existing record.
+     *
+     * Grants are made when a record is created, so a judge approved later - or
+     * one who published their key after the upload - would otherwise never be
+     * able to open historical evidence.
+     */
+    const handleGrantAccess = async (targetEvidenceId: string) => {
+        if (!contract || !provider || !account) return;
+
+        const pending = (caseGrants[targetEvidenceId] || []).filter((g) => !g.hasAccess);
+        if (pending.length === 0) return;
+
+        setIsGranting(true);
+        try {
+            setStatusMessage("Unwrapping this record's key to seal it for new readers...");
+            const contentKey = await getContentKeyFor(contract, provider, account, targetEvidenceId);
+            const contentKeyRaw = await exportContentKey(contentKey);
+
+            const granted = await grantAccess(
+                contract, targetEvidenceId, contentKeyRaw, pending, setStatusMessage
+            );
+
+            setStatusMessage(`✅ Access granted to: ${granted.map((g) => g.name).join(", ")}.`);
+            await loadGrantsFor(targetEvidenceId);
+            setTimeout(() => setStatusMessage(""), 6000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`❌ Could not grant access: ${err.message}`);
+        } finally {
+            setIsGranting(false);
+        }
+    };
+
+    /** Reads the revision trail for one case so the panel can show it. */
+    const loadVersionsFor = async (targetEvidenceId: string) => {
+        if (!contract) return;
+        try {
+            const count = Number(await contract.getVersionCount(targetEvidenceId));
+            const list: VersionEntry[] = [];
+            for (let i = 0; i < count; i++) {
+                const v = await contract.getDocumentVersion(targetEvidenceId, i);
+                list.push({
+                    index: i,
+                    ipfsHash: v[0],
+                    fileType: v[1],
+                    note: v[2],
+                    authorName: v[4],
+                    timestamp: Number(v[5]),
+                });
+            }
+            setCaseVersions((prev) => ({ ...prev, [targetEvidenceId]: list }));
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    /**
+     * Records a corrected document as a new revision.
+     *
+     * This is distinct from appending files: an append adds further material to
+     * the case, while a revision supersedes a document. Earlier versions stay
+     * on-chain and readable, which is what makes the trail auditable.
+     */
+    const handleAddVersion = async (e: React.FormEvent, targetEvidenceId: string) => {
+        e.preventDefault();
+        if (!versionFile || !contract) return;
+
+        setIsVersioning(true);
+        setStatusMessage("Preparing to encrypt the revised document...");
+
+        try {
+            if (!provider || !account) throw new Error("Wallet is not connected.");
+
+            // Same content key as the rest of the record, so existing recipients
+            // can open the revision without a new grant.
+            setStatusMessage("Unwrapping this record's key to encrypt the revision...");
+            const contentKey = await getContentKeyFor(contract, provider, account, targetEvidenceId);
+
+            const fileType = versionFile.type || "application/octet-stream";
+            const encrypted = await encryptFile(versionFile, contentKey);
+            const hash = await uploadToPinata(
+                new File([encrypted], `${versionFile.name}.enc`, { type: "application/octet-stream" })
+            );
+
+            setStatusMessage("Document pinned. Anchoring revision on the blockchain...");
+            const tx = await contract.addDocumentVersion(targetEvidenceId, hash, fileType, versionNote);
+            await tx.wait();
+
+            setStatusMessage("\u2705 Revision recorded. Earlier versions remain intact.");
+            setVersionFile(null);
+            setVersionNote("");
+            await loadVersionsFor(targetEvidenceId);
+            fetchAllEvidence();
+
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c Error recording revision: ${err.message}`);
+        } finally {
+            setIsVersioning(false);
+        }
+    };
+
     // Append Files
     const handleAppendFiles = async (e: React.FormEvent, targetEvidenceId: string) => {
         e.preventDefault();
         if (appendFiles.length === 0 || !contract) return;
 
         setIsAppending(true);
-        setStatusMessage("Uploading new evidence files to IPFS...");
+        setStatusMessage("Preparing to encrypt the new evidence files...");
         const newIpfsHashes: string[] = [];
         const newFileTypes: string[] = [];
 
         try {
+            if (!provider || !account) throw new Error("Wallet is not connected.");
+
+            // Reuse the record's existing content key, otherwise anyone already
+            // granted access would be unable to read the newly added files.
+            setStatusMessage("Unwrapping this record's key to encrypt the new files...");
+            const contentKey = await getContentKeyFor(contract, provider, account, targetEvidenceId);
+
             for (let i = 0; i < appendFiles.length; i++) {
-                const hash = await uploadToPinata(appendFiles[i]);
+                const file = appendFiles[i];
+                setStatusMessage(`Encrypting and uploading file ${i + 1} of ${appendFiles.length}...`);
+                const encrypted = await encryptFile(file, contentKey);
+                const hash = await uploadToPinata(
+                    new File([encrypted], `${file.name}.enc`, { type: "application/octet-stream" })
+                );
                 newIpfsHashes.push(hash);
-                let typeStr = appendFiles[i].type || "application/octet-stream";
-                newFileTypes.push(typeStr);
+                newFileTypes.push(file.type || "application/octet-stream");
             }
 
             setStatusMessage("Files uploaded. Appending to blockchain record...");
@@ -242,6 +432,9 @@ export default function PoliceDashboard() {
         const ipfsHashes: string[] = [];
         const fileTypes: string[] = [];
         let forgeryDetected = false;
+        // Set when files are encrypted; stays null for a tip conversion, whose
+        // file was pinned by the whistleblower and is not ours to encrypt.
+        let contentKeyRaw: Uint8Array | null = null;
 
         if (!tipHash) {
             // --- AI SCANNING PHASE ---
@@ -298,24 +491,73 @@ export default function PoliceDashboard() {
                 return; // Abort the upload
             }
 
-            // --- IPFS PINNING ---
+            // --- ENCRYPTION ---
             setIsUploading(true);
-            setStatusMessage("Files verified. Pinning to IPFS Network...");
+            try {
+                if (!provider || !account) throw new Error("Wallet is not connected.");
+                await ensureKeyRegistered(contract, provider, account, setStatusMessage);
 
-            for (let i = 0; i < files.length; i++) {
-                setStatusMessage(`Uploading file ${i + 1} of ${files.length}...`);
-                const hash = await uploadToPinata(files[i]);
-                ipfsHashes.push(hash);
+                setStatusMessage("Encrypting files in your browser...");
+                const sealed = await sealFiles(files);
+                contentKeyRaw = sealed.contentKeyRaw;
 
-                let typeStr = files[i].type;
-                if (!typeStr) typeStr = "application/octet-stream";
-                fileTypes.push(typeStr);
+                // --- IPFS PINNING (ciphertext only) ---
+                for (let i = 0; i < sealed.uploads.length; i++) {
+                    setStatusMessage(`Uploading encrypted file ${i + 1} of ${sealed.uploads.length}...`);
+                    const upload = sealed.uploads[i];
+                    // Pinata receives ciphertext. The original name and type stay
+                    // local; only the type is anchored, so the court knows how to
+                    // open the file once it has decrypted it.
+                    const encryptedFile = new File([upload.blob], `${upload.originalName}.enc`, {
+                        type: "application/octet-stream",
+                    });
+                    ipfsHashes.push(await uploadToPinata(encryptedFile));
+                    fileTypes.push(upload.originalType);
+                }
+            } catch (err: any) {
+                console.error(err);
+                setStatusMessage(`❌ Encryption failed: ${err.message}`);
+                setIsUploading(false);
+                return;
             }
         } else {
-            // Using tip hash directly without scanning
+            // A converted tip was pinned in the clear by the public portal, which
+            // has no key to seal to. Fetch it and re-pin an encrypted copy, so
+            // every evidence record is protected the same way and the court does
+            // not need a separate path to open tip-derived files.
             setIsUploading(true);
-            ipfsHashes.push(tipHash);
-            fileTypes.push("application/octet-stream");
+            try {
+                if (!provider || !account) throw new Error("Wallet is not connected.");
+                await ensureKeyRegistered(contract, provider, account, setStatusMessage);
+
+                setStatusMessage("Fetching the tip attachment so it can be encrypted...");
+                const res = await fetch(`https://gateway.pinata.cloud/ipfs/${tipHash}`);
+                if (!res.ok) {
+                    throw new Error(`Could not fetch the tip attachment (status ${res.status}).`);
+                }
+                const tipBlob = await res.blob();
+
+                setStatusMessage("Encrypting the tip attachment...");
+                const sealed = await sealFiles([
+                    new File([tipBlob], `tip-${tipHash}`, {
+                        type: tipBlob.type || "application/octet-stream",
+                    }),
+                ]);
+                contentKeyRaw = sealed.contentKeyRaw;
+
+                const upload = sealed.uploads[0];
+                ipfsHashes.push(await uploadToPinata(
+                    new File([upload.blob], `${upload.originalName}.enc`, {
+                        type: "application/octet-stream",
+                    })
+                ));
+                fileTypes.push(upload.originalType);
+            } catch (err: any) {
+                console.error(err);
+                setStatusMessage(`❌ Could not convert the tip: ${err.message}`);
+                setIsUploading(false);
+                return;
+            }
         }
 
         // --- BLOCKCHAIN PHASE ---
@@ -333,7 +575,26 @@ export default function PoliceDashboard() {
 
             setStatusMessage("Transaction submitted. Waiting for blockchain confirmation...");
             await tx.wait();
-            setStatusMessage("✅ Evidence successfully secured on the blockchain!");
+
+            // Seal the content key to everyone who must read the record. The
+            // record has to exist first: grantDecryptionKey requires it.
+            if (contentKeyRaw) {
+                setStatusMessage("Sealing decryption keys for the court...");
+                const courts = await listKeyHolders(contract, "Court");
+                const self = account ? [{ address: account, name: "You", role: "Police" }] : [];
+                const granted = await grantAccess(
+                    contract, evidenceId, contentKeyRaw, [...self, ...courts], setStatusMessage
+                );
+
+                const courtNames = granted.filter((g) => g.role === "Court").map((g) => g.name);
+                setStatusMessage(
+                    courtNames.length > 0
+                        ? `✅ Encrypted and anchored. Readable by: ${courtNames.join(", ")}.`
+                        : "✅ Encrypted and anchored. No court has published an encryption key yet, so none can read it."
+                );
+            } else {
+                setStatusMessage("✅ Evidence successfully secured on the blockchain!");
+            }
 
             setTimeout(() => {
                 setEvidenceId("");
@@ -708,7 +969,21 @@ export default function PoliceDashboard() {
                                                         {/* Header summary */}
                                                         <div 
                                                             className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 cursor-pointer"
-                                                            onClick={() => setExpandedEvidence(expandedEvidence === evidence.id ? null : evidence.id)}
+                                                            onClick={() => {
+                                                                const opening = expandedEvidence !== evidence.id;
+                                                                setExpandedEvidence(opening ? evidence.id : null);
+                                                                // The revision and append forms are rendered per case but
+                                                                // read shared state. Without this reset, a file picked for
+                                                                // one case would be submitted against the next one opened.
+                                                                setVersionFile(null);
+                                                                setVersionNote("");
+                                                                setAppendFiles([]);
+                                                                setStatusMessage("");
+                                                                if (opening) {
+                                                                    loadVersionsFor(evidence.id);
+                                                                    loadGrantsFor(evidence.id);
+                                                                }
+                                                            }}
                                                         >
                                                             <div className="flex flex-col gap-2">
                                                                 <div className="flex items-center gap-3">
@@ -754,22 +1029,150 @@ export default function PoliceDashboard() {
                                                                         <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Attached Files</p>
                                                                         <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-2">
                                                                             {evidence.ipfsHashes.map((hash: string, fileIdx: number) => (
-                                                                                <a
+                                                                                <button
                                                                                     key={hash}
-                                                                                    href={`https://ipfs.io/ipfs/${hash}`}
-                                                                                    target="_blank" rel="noreferrer"
-                                                                                    className="flex items-center gap-3 p-3 border-[2px] border-black hover:bg-zinc-100 transition-all bg-zinc-50"
+                                                                                    onClick={() => openFile(
+                                                                                        evidence.id,
+                                                                                        hash,
+                                                                                        evidence.fileTypes[fileIdx] || "application/octet-stream",
+                                                                                        `${evidence.id}-file-${fileIdx + 1}`
+                                                                                    )}
+                                                                                    disabled={decryptingCid !== null}
+                                                                                    className="flex items-center gap-3 p-3 border-[2px] border-black hover:bg-zinc-100 transition-all bg-zinc-50 text-left disabled:opacity-40"
                                                                                 >
-                                                                                    <FileIcon size={16} className="shrink-0" />
+                                                                                    {decryptingCid === hash
+                                                                                        ? <Loader2 size={16} className="animate-spin shrink-0" />
+                                                                                        : <FileIcon size={16} className="shrink-0" />}
                                                                                     <div className="min-w-0 flex-1">
-                                                                                        <p className="font-black uppercase text-[10px] truncate">File {fileIdx + 1}</p>
+                                                                                        <p className="font-black uppercase text-[10px] truncate">Decrypt File {fileIdx + 1}</p>
                                                                                         <p className="text-[8px] font-mono text-zinc-500 uppercase truncate">{evidence.fileTypes[fileIdx] || "Unknown"}</p>
                                                                                     </div>
                                                                                     <ArrowRight size={14} className="text-zinc-400" />
-                                                                                </a>
+                                                                                </button>
                                                                             ))}
                                                                         </div>
                                                                     </div>
+                                                                </div>
+
+                                                                {/* Decryption Access */}
+                                                                <div className="border-[4px] border-black p-6 bg-white mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-4 flex items-center gap-2">
+                                                                        <ShieldCheck size={16} /> Who Can Decrypt
+                                                                    </h4>
+
+                                                                    {(caseGrants[evidence.id] || []).length === 0 ? (
+                                                                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                                                            No court has published an encryption key yet.
+                                                                        </p>
+                                                                    ) : (
+                                                                        <>
+                                                                            <ul className="space-y-2 mb-4">
+                                                                                {(caseGrants[evidence.id] || []).map((grant) => (
+                                                                                    <li key={grant.address} className="flex items-center justify-between gap-3 border-[2px] border-black px-3 py-2 bg-zinc-50">
+                                                                                        <span className="font-black uppercase text-[10px] truncate">{grant.name}</span>
+                                                                                        <span className={`shrink-0 px-2 py-1 text-[9px] font-black uppercase tracking-widest ${grant.hasAccess ? "bg-black text-white" : "border-[2px] border-black"}`}>
+                                                                                            {grant.hasAccess ? "Has access" : "No access"}
+                                                                                        </span>
+                                                                                    </li>
+                                                                                ))}
+                                                                            </ul>
+
+                                                                            {(caseGrants[evidence.id] || []).some((g) => !g.hasAccess) && (
+                                                                                <button
+                                                                                    onClick={() => handleGrantAccess(evidence.id)}
+                                                                                    disabled={isGranting}
+                                                                                    className="w-full py-3 bg-black text-white font-black uppercase text-xs tracking-widest hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 border-[3px] border-black"
+                                                                                >
+                                                                                    {isGranting
+                                                                                        ? <><Loader2 size={16} className="animate-spin" /> Sealing...</>
+                                                                                        : `Grant access to ${(caseGrants[evidence.id] || []).filter((g) => !g.hasAccess).length} court(s)`}
+                                                                                </button>
+                                                                            )}
+                                                                        </>
+                                                                    )}
+                                                                </div>
+
+                                                                {/* Revision History */}
+                                                                <div className="border-[4px] border-black p-6 bg-white mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-4 flex items-center gap-2">
+                                                                        <FileStack size={16} /> Revision History ({(caseVersions[evidence.id] || []).length})
+                                                                    </h4>
+
+                                                                    {(caseVersions[evidence.id] || []).length === 0 ? (
+                                                                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                                                            No revisions. The original submission is the current document.
+                                                                        </p>
+                                                                    ) : (
+                                                                        <ol className="space-y-3">
+                                                                            {[...(caseVersions[evidence.id] || [])].reverse().map((version) => (
+                                                                                <li key={version.index} className="border-[3px] border-black p-4 bg-zinc-50">
+                                                                                    <div className="flex items-start justify-between gap-3 mb-2">
+                                                                                        <span className="bg-black text-white px-2 py-1 text-[9px] font-black uppercase tracking-widest shrink-0">
+                                                                                            v{version.index + 1}
+                                                                                            {version.index === (caseVersions[evidence.id] || []).length - 1 && " - current"}
+                                                                                        </span>
+                                                                                        <span className="font-mono text-[9px] font-black uppercase text-zinc-500 text-right">
+                                                                                            {new Date(version.timestamp * 1000).toLocaleString()}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    <p className="text-xs font-bold mb-2 leading-snug">{version.note || "No note recorded"}</p>
+                                                                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                                                        <span className="font-mono text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                                                                            By {version.authorName}
+                                                                                        </span>
+                                                                                        <button
+                                                                                            onClick={() => openFile(
+                                                                                                evidence.id,
+                                                                                                version.ipfsHash,
+                                                                                                version.fileType,
+                                                                                                `${evidence.id}-v${version.index + 1}`
+                                                                                            )}
+                                                                                            disabled={decryptingCid !== null}
+                                                                                            className="border-[2px] border-black px-3 py-1 text-[9px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors disabled:opacity-40"
+                                                                                        >
+                                                                                            Decrypt v{version.index + 1}
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </li>
+                                                                            ))}
+                                                                        </ol>
+                                                                    )}
+                                                                </div>
+
+                                                                {/* Record a Revision */}
+                                                                <div className="border-[4px] border-dashed border-black/40 p-6 bg-zinc-50 mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-2 flex items-center gap-2">
+                                                                        <UploadCloud size={16} /> Record New Version
+                                                                    </h4>
+                                                                    <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-4">
+                                                                        Supersedes the document. Earlier versions stay on-chain.
+                                                                    </p>
+                                                                    <form onSubmit={(e) => handleAddVersion(e, evidence.id)} className="flex flex-col gap-4">
+                                                                        <div className="flex-1 border-[3px] border-black bg-white flex items-center justify-between px-4 py-2 hover:bg-zinc-100 transition-colors cursor-pointer relative">
+                                                                            <input
+                                                                                type="file" required
+                                                                                onChange={(e) => setVersionFile(e.target.files?.[0] || null)}
+                                                                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                                                            />
+                                                                            <span className="font-mono text-xs font-bold uppercase truncate max-w-[220px]">
+                                                                                {versionFile ? versionFile.name : "Select revised document"}
+                                                                            </span>
+                                                                            <FileStack size={16} />
+                                                                        </div>
+                                                                        <input
+                                                                            type="text" required value={versionNote}
+                                                                            onChange={(e) => setVersionNote(e.target.value)}
+                                                                            placeholder="What changed in this revision?"
+                                                                            className="border-[3px] border-black px-4 py-3 font-mono text-xs font-bold focus:outline-none focus:bg-white bg-white"
+                                                                        />
+                                                                        <button
+                                                                            type="submit"
+                                                                            disabled={isVersioning || !versionFile}
+                                                                            className="px-6 py-3 bg-black text-white font-black uppercase text-xs tracking-widest hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 border-[3px] border-black"
+                                                                        >
+                                                                            {isVersioning ? <><Loader2 size={16} className="animate-spin" /> Anchoring...</> : 'Record Version'}
+                                                                        </button>
+                                                                    </form>
                                                                 </div>
 
                                                                 {/* Append Section */}

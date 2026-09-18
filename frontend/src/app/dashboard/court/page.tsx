@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
+import { ensureKeyRegistered, openEncryptedFile, downloadBlob } from "../../../utils/evidenceCrypto";
 import {
     Scale, Loader2, Search, CheckCircle, FileWarning,
     Eye, Gavel, ShieldCheck, Fingerprint, Database, Home
@@ -72,8 +73,22 @@ function ThreeBackground() {
     return <div ref={containerRef} className="fixed inset-0 -z-10 bg-white" />;
 }
 
+/** One row of the searchable case index. */
+interface CaseRecord {
+    id: string;
+    caseNumber: string;
+    location: string;
+    crimeDescription: string;
+    fileTypes: string[];
+    officerName: string;
+    timestamp: number;
+    status: number;
+    fileCount: number;
+    versionCount: number;
+}
+
 export default function CourtDashboard() {
-    const { account, role, status, isApproved, contract, isLoading } = useWeb3();
+    const { account, role, status, isApproved, contract, isLoading, provider } = useWeb3();
     const router = useRouter();
 
     const [evidenceId, setEvidenceId] = useState("");
@@ -81,6 +96,17 @@ export default function CourtDashboard() {
     const [isSearching, setIsSearching] = useState(false);
     const [isUpdating, setIsUpdating] = useState(false);
     const [statusMessage, setStatusMessage] = useState("");
+
+    // Full-text search over the case index.
+    const [allRecords, setAllRecords] = useState<CaseRecord[]>([]);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [isIndexing, setIsIndexing] = useState(false);
+    const [versions, setVersions] = useState<any[]>([]);
+
+    // Decryption: which file is being opened, and whether a key was granted.
+    const [decryptingCid, setDecryptingCid] = useState<string | null>(null);
+    const [hasKey, setHasKey] = useState(false);
+    const [isPublishingKey, setIsPublishingKey] = useState(false);
     useEffect(() => {
         if (!isLoading) {
             if (!account || (role !== "Court" && status !== 2)) {
@@ -89,25 +115,138 @@ export default function CourtDashboard() {
         }
     }, [account, role, status, isLoading, router]);
 
-    const handleSearch = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!contract || !evidenceId) return;
+    /**
+     * Builds the searchable index.
+     *
+     * Uses getEvidenceData, a view call, so indexing costs no gas and writes no
+     * access record. Only opening a record calls getEvidence, which is what logs
+     * the view into the chain of custody.
+     */
+    const loadIndex = async () => {
+        if (!contract) return;
+        setIsIndexing(true);
+        try {
+            const count = Number(await contract.getEvidenceCount());
+            const records: CaseRecord[] = [];
+
+            for (let i = 0; i < count; i++) {
+                const id = await contract.evidenceIds(i);
+                const data = await contract.getEvidenceData(id);
+                if (!data.exists) continue;
+
+                let versionCount = 0;
+                try {
+                    versionCount = Number(await contract.getVersionCount(id));
+                } catch {
+                    versionCount = 0;
+                }
+
+                records.push({
+                    id,
+                    caseNumber: data[1] || "",
+                    location: data[2] || "",
+                    crimeDescription: data[3] || "",
+                    fileTypes: data[4] || [],
+                    officerName: data[5] || "",
+                    timestamp: Number(data[6] || 0),
+                    status: Number(data[7] || 0),
+                    fileCount: (data[0] || []).length,
+                    versionCount,
+                });
+            }
+
+            setAllRecords(records);
+        } catch (err) {
+            console.error(err);
+            setStatusMessage("\u274c Could not build the case index.");
+        } finally {
+            setIsIndexing(false);
+        }
+    };
+
+    useEffect(() => {
+        if (contract && isApproved) loadIndex();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [contract, isApproved]);
+
+    const getStatusText = (status: number) => {
+        switch (status) {
+            case 0: return "Submitted";
+            case 1: return "Under Review";
+            case 2: return "Verified";
+            case 3: return "Archived";
+            default: return "Unknown";
+        }
+    };
+
+    /** Case-insensitive match across every indexed text field. */
+    const matchesQuery = (record: CaseRecord, query: string) => {
+        const haystack = [
+            record.id,
+            record.caseNumber,
+            record.location,
+            record.crimeDescription,
+            record.officerName,
+            getStatusText(record.status),
+            ...(record.fileTypes || []),
+        ].join(" ").toLowerCase();
+
+        // Every whitespace-separated term must match, so extra words narrow.
+        return query
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean)
+            .every((term) => haystack.includes(term));
+    };
+
+    const filteredRecords = searchQuery.trim()
+        ? allRecords.filter((r) => matchesQuery(r, searchQuery))
+        : allRecords;
+
+    const loadVersions = async (id: string) => {
+        if (!contract) return;
+        try {
+            const count = Number(await contract.getVersionCount(id));
+            const list = [];
+            for (let i = 0; i < count; i++) {
+                const v = await contract.getDocumentVersion(id, i);
+                list.push({
+                    index: i,
+                    ipfsHash: v[0],
+                    fileType: v[1],
+                    note: v[2],
+                    authorName: v[4],
+                    timestamp: Number(v[5]),
+                });
+            }
+            setVersions(list);
+        } catch (err) {
+            console.error(err);
+            setVersions([]);
+        }
+    };
+
+    /** Opens a record: logs the view on-chain, then loads detail and versions. */
+    const openRecord = async (id: string) => {
+        if (!contract || !id) return;
 
         setIsSearching(true);
         setStatusMessage("");
         setEvidenceData(null);
+        setVersions([]);
+        setEvidenceId(id);
 
         try {
             setStatusMessage("Querying state and logging access...");
-            const evidence = await contract.getEvidenceData(evidenceId);
+            const evidence = await contract.getEvidenceData(id);
 
             if (!evidence.exists) {
-                setStatusMessage("❌ Evidence ID not found in the ledger.");
+                setStatusMessage("\u274c Evidence ID not found in the ledger.");
                 setIsSearching(false);
                 return;
             }
 
-            const tx = await contract.getEvidence(evidenceId);
+            const tx = await contract.getEvidence(id);
             await tx.wait();
 
             setEvidenceData({
@@ -121,12 +260,56 @@ export default function CourtDashboard() {
                 status: Number(evidence[7] || evidence.status)
             });
 
+            await loadVersions(id);
+            setHasKey(await contract.hasDecryptionAccess(id, account));
             setStatusMessage("");
         } catch (err: any) {
             console.error(err);
-            setStatusMessage("❌ Error fetching evidence or logging access.");
+            setStatusMessage("\u274c Error fetching evidence or logging access.");
         } finally {
             setIsSearching(false);
+        }
+    };
+
+    /** Publishes this judge's encryption public key so police can seal keys to it. */
+    const publishEncryptionKey = async () => {
+        if (!contract || !provider || !account) return;
+        setIsPublishingKey(true);
+        try {
+            await ensureKeyRegistered(contract, provider, account, setStatusMessage);
+            setStatusMessage("\u2705 Encryption key published. Police can now grant you access.");
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c Could not publish encryption key: ${err.message}`);
+        } finally {
+            setIsPublishingKey(false);
+        }
+    };
+
+    /** Fetches the ciphertext, unwraps the granted key, and decrypts in-browser. */
+    const openFile = async (cid: string, mimeType: string, label: string) => {
+        if (!contract || !provider || !account) return;
+        setDecryptingCid(cid);
+        setStatusMessage("Fetching encrypted file and decrypting locally...");
+        try {
+            const blob = await openEncryptedFile(contract, provider, account, evidenceId, cid, mimeType);
+            downloadBlob(blob, label);
+            setStatusMessage("\u2705 Decrypted. The file was opened in your browser, never on a server.");
+            setTimeout(() => setStatusMessage(""), 6000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c ${err.message}`);
+        } finally {
+            setDecryptingCid(null);
+        }
+    };
+
+    /** Enter on the search box opens the record when the query narrows to one. */
+    const handleSearch = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (filteredRecords.length === 1) {
+            await openRecord(filteredRecords[0].id);
         }
     };
 
@@ -147,15 +330,6 @@ export default function CourtDashboard() {
         }
     };
 
-    const getStatusText = (status: number) => {
-        switch (status) {
-            case 0: return "Submitted";
-            case 1: return "Under Review";
-            case 2: return "Verified";
-            case 3: return "Archived";
-            default: return "Unknown";
-        }
-    };
 
     if (isLoading) {
         return (
@@ -231,24 +405,108 @@ export default function CourtDashboard() {
 
                             <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-4">
                                 <input
-                                    required type="text" value={evidenceId} onChange={e => setEvidenceId(e.target.value)}
-                                    className="flex-1 border-[4px] border-black px-6 py-4 text-xl font-bold uppercase placeholder:text-zinc-300 focus:outline-none focus:bg-zinc-50 transition-colors"
-                                    placeholder="EVD-ID-NUMBER"
+                                    type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                                    className="flex-1 border-[4px] border-black px-6 py-4 text-xl font-bold placeholder:text-zinc-300 focus:outline-none focus:bg-zinc-50 transition-colors"
+                                    placeholder="Search case no, location, officer, description..."
                                 />
                                 <button
-                                    type="submit"
-                                    disabled={isSearching}
+                                    type="button"
+                                    onClick={loadIndex}
+                                    disabled={isIndexing}
                                     className="bg-black text-white px-10 py-4 font-black uppercase tracking-widest hover:bg-zinc-800 disabled:opacity-50 flex items-center justify-center gap-3"
                                 >
-                                    {isSearching ? <Loader2 className="animate-spin" /> : <><Gavel size={20} /> Execute</>}
+                                    {isIndexing ? <Loader2 className="animate-spin" /> : <><Database size={20} /> Refresh</>}
                                 </button>
                             </form>
 
+                            {/* --- Result list --- */}
+                            <div className="mt-8">
+                                <div className="flex items-center justify-between mb-4 pb-2 border-b-[3px] border-black">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500">
+                                        {isIndexing
+                                            ? "Indexing ledger..."
+                                            : `${filteredRecords.length} of ${allRecords.length} record(s)`}
+                                    </p>
+                                    {searchQuery && (
+                                        <button
+                                            onClick={() => setSearchQuery("")}
+                                            className="text-[10px] font-black uppercase tracking-widest underline hover:no-underline"
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
+                                </div>
+
+                                {!isIndexing && filteredRecords.length === 0 && (
+                                    <div className="border-[3px] border-dashed border-black/30 p-8 text-center">
+                                        <FileWarning size={28} className="mx-auto mb-3 text-zinc-400" strokeWidth={3} />
+                                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                            {allRecords.length === 0
+                                                ? "No records anchored on the ledger yet"
+                                                : "No record matches this query"}
+                                        </p>
+                                    </div>
+                                )}
+
+                                <div className="space-y-3 max-h-[26rem] overflow-y-auto pr-1">
+                                    {filteredRecords.map((record) => (
+                                        <button
+                                            key={record.id}
+                                            onClick={() => openRecord(record.id)}
+                                            disabled={isSearching}
+                                            className={`w-full text-left border-[4px] p-5 transition-colors disabled:opacity-50 ${
+                                                evidenceId === record.id
+                                                    ? "border-black bg-black text-white"
+                                                    : "border-black bg-white hover:bg-zinc-100"
+                                            }`}
+                                        >
+                                            <div className="flex items-start justify-between gap-4 mb-2">
+                                                <span className="font-[1000] uppercase tracking-tighter text-xl truncate">{record.id}</span>
+                                                <span className={`shrink-0 px-3 py-1 text-[9px] font-black uppercase tracking-widest border-[2px] ${
+                                                    evidenceId === record.id ? "border-white" : "border-black"
+                                                }`}>
+                                                    {getStatusText(record.status)}
+                                                </span>
+                                            </div>
+                                            <p className={`font-mono text-[10px] uppercase tracking-wider mb-2 ${
+                                                evidenceId === record.id ? "text-zinc-300" : "text-zinc-500"
+                                            }`}>
+                                                {record.caseNumber} &middot; {record.location} &middot; {record.officerName}
+                                            </p>
+                                            <p className="text-xs font-medium line-clamp-2 leading-snug">{record.crimeDescription}</p>
+                                            <p className={`mt-2 font-mono text-[9px] font-black uppercase tracking-widest ${
+                                                evidenceId === record.id ? "text-zinc-400" : "text-zinc-400"
+                                            }`}>
+                                                {record.fileCount} file(s) &middot; {record.versionCount} revision(s)
+                                            </p>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
                             {statusMessage && (
-                                <div className={`mt-6 p-4 border-[3px] border-black font-mono text-[10px] font-black uppercase tracking-wider ${statusMessage.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                <div className={`mt-6 p-4 border-[3px] border-black font-mono text-[10px] font-black uppercase tracking-wider break-all ${statusMessage.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
                                     {statusMessage}
                                 </div>
                             )}
+
+                            {/* Evidence is sealed to a published key, so a judge
+                                must publish one before police can grant access. */}
+                            <div className="mt-6 border-[3px] border-dashed border-black/40 p-5 flex flex-col sm:flex-row sm:items-center gap-4 justify-between">
+                                <div>
+                                    <p className="text-[10px] font-black uppercase tracking-[0.25em] mb-1">Encryption Key</p>
+                                    <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500">
+                                        Publish yours so police can seal evidence you alone can open.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={publishEncryptionKey}
+                                    disabled={isPublishingKey}
+                                    className="shrink-0 border-[3px] border-black px-5 py-3 font-black uppercase text-[10px] tracking-widest hover:bg-black hover:text-white transition-colors disabled:opacity-50 flex items-center gap-2"
+                                >
+                                    {isPublishingKey ? <><Loader2 size={14} className="animate-spin" /> Publishing...</> : 'Publish Key'}
+                                </button>
+                            </div>
                         </div>
 
                         {/* Evidence Result Display */}
@@ -303,6 +561,62 @@ export default function CourtDashboard() {
                                         </div>
                                     </div>
 
+                                    {/* Revision History */}
+                                    <div className="pt-8 border-t-[6px] border-black mt-8">
+                                        <div className="flex items-center gap-3 mb-4">
+                                            <Fingerprint size={24} strokeWidth={3} />
+                                            <h4 className="text-xl font-black uppercase tracking-tighter">
+                                                Revision History ({versions.length})
+                                            </h4>
+                                        </div>
+
+                                        {versions.length === 0 ? (
+                                            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-400 border-[3px] border-dashed border-black/20 p-5">
+                                                No revisions recorded. The original submission is the current document.
+                                            </p>
+                                        ) : (
+                                            <ol className="space-y-3 mb-4">
+                                                {[...versions].reverse().map((version) => (
+                                                    <li
+                                                        key={version.index}
+                                                        className="border-[4px] border-black p-5 bg-zinc-50"
+                                                    >
+                                                        <div className="flex items-start justify-between gap-4 mb-2">
+                                                            <span className="bg-black text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest shrink-0">
+                                                                v{version.index + 1}
+                                                                {version.index === versions.length - 1 && " - current"}
+                                                            </span>
+                                                            <span className="font-mono text-[9px] font-black uppercase text-zinc-500 text-right">
+                                                                {new Date(version.timestamp * 1000).toLocaleString()}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-sm font-bold mb-2 leading-snug">{version.note || "No note recorded"}</p>
+                                                        <div className="flex flex-wrap items-center gap-3 justify-between">
+                                                            <p className="font-mono text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                                                By {version.authorName}
+                                                            </p>
+                                                            <button
+                                                                onClick={() => openFile(
+                                                                    version.ipfsHash,
+                                                                    version.fileType,
+                                                                    `${evidenceId}-v${version.index + 1}`
+                                                                )}
+                                                                disabled={decryptingCid !== null || !hasKey}
+                                                                title={hasKey ? "Decrypt and open this version" : "No decryption key has been granted to you"}
+                                                                className="inline-flex items-center gap-2 border-[3px] border-black px-3 py-1 text-[10px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-black"
+                                                            >
+                                                                {decryptingCid === version.ipfsHash
+                                                                    ? <Loader2 size={14} className="animate-spin" />
+                                                                    : <Eye size={14} strokeWidth={3} />}
+                                                                {hasKey ? `Decrypt v${version.index + 1}` : `v${version.index + 1} Locked`}
+                                                            </button>
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                            </ol>
+                                        )}
+                                    </div>
+
                                     {/* Action Footer */}
                                     <div className="pt-8 border-t-[6px] border-black mt-8">
                                         <h4 className="text-xl font-black uppercase tracking-tighter mb-4">Attached Evidence Files</h4>
@@ -310,18 +624,23 @@ export default function CourtDashboard() {
                                             {evidenceData.ipfsHashes && evidenceData.ipfsHashes.map((hash: string, idx: number) => {
                                                 const fileType = evidenceData.fileTypes[idx] || "Unknown";
                                                 return (
-                                                    <a
+                                                    <button
                                                         key={hash}
-                                                        href={`https://ipfs.io/ipfs/${hash}`}
-                                                        target="_blank" rel="noreferrer"
-                                                        className="flex items-center gap-3 p-4 border-[4px] border-black hover:bg-zinc-100 transition-all bg-white"
+                                                        onClick={() => openFile(hash, fileType, `${evidenceId}-file-${idx + 1}`)}
+                                                        disabled={decryptingCid !== null || !hasKey}
+                                                        title={hasKey ? "Decrypt and open" : "No decryption key has been granted to you for this record"}
+                                                        className="flex items-center gap-3 p-4 border-[4px] border-black hover:bg-zinc-100 transition-all bg-white text-left disabled:opacity-40 disabled:hover:bg-white"
                                                     >
-                                                        <Eye size={20} strokeWidth={3} className="shrink-0" />
+                                                        {decryptingCid === hash
+                                                            ? <Loader2 size={20} className="animate-spin shrink-0" />
+                                                            : <Eye size={20} strokeWidth={3} className="shrink-0" />}
                                                         <div className="min-w-0">
-                                                            <p className="font-black uppercase text-xs truncate">File {idx + 1}</p>
+                                                            <p className="font-black uppercase text-xs truncate">
+                                                                {hasKey ? `Decrypt File ${idx + 1}` : `File ${idx + 1} - Locked`}
+                                                            </p>
                                                             <p className="text-[9px] font-mono text-zinc-500 uppercase truncate">{fileType}</p>
                                                         </div>
-                                                    </a>
+                                                    </button>
                                                 );
                                             })}
                                         </div>
@@ -355,7 +674,7 @@ export default function CourtDashboard() {
                                     <Database size={64} className="text-black mb-4" />
                                     <h3 className="text-2xl font-black uppercase tracking-tighter text-black">Awaiting Query</h3>
                                     <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-black/40 mt-2 max-w-xs leading-relaxed">
-                                        The judicial node is idle. Enter an Evidence ID to pull records from the master ledger.
+                                        The judicial node is idle. Search the ledger above and select a record to open it. Opening a record logs the access on-chain.
                                     </p>
                                 </motion.div>
                             )}

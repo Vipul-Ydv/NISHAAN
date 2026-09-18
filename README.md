@@ -9,10 +9,16 @@ file produces a different CID and no longer matches the on-chain record.
 
 ## 🌟 Key Features
 
-- **Tamper Evidence:** Files are pinned to IPFS via Pinata. The resulting CID and
-  the evidence metadata are written to an Ethereum smart contract. Because a CID
-  is derived from the file's content, a modified file cannot match the anchored
-  hash — alteration is detectable.
+- **End-to-End Encryption:** Evidence files are encrypted in the browser with a
+  per-record AES-256-GCM key before they are pinned. That content key is sealed
+  to each authorised reader's X25519 public key and stored on-chain. The pinning
+  service holds only ciphertext, the contract holds only sealed keys it cannot
+  open, and the admin - who governs who is approved - cannot read evidence.
+- **Tamper Evidence:** The CID of the encrypted file and the record metadata are
+  written to an Ethereum smart contract. Because a CID is derived from content, a
+  modified file cannot match the anchored hash. AES-GCM authenticates in
+  addition, so an altered byte fails to decrypt rather than decrypting to
+  plausible garbage.
 - **Role-Based Execution Policies:** Access control is enforced in the contract.
   Only approved **Police** accounts can submit or append evidence, only **Court**
   accounts can mark evidence Verified, and an **Admin** account provisions access.
@@ -32,11 +38,26 @@ file produces a different CID and no longer matches the on-chain record.
 These are current gaps, stated plainly so nobody mistakes the system for
 providing a guarantee it does not yet provide.
 
-- **Evidence files are not encrypted.** Files are pinned to IPFS as-is and the
-  court dashboard links them through a public IPFS gateway. Anyone who obtains a
-  CID can read the file contents. The contract provides *integrity and
-  auditability*, not *confidentiality*. Client-side encryption is not yet
-  implemented and is required before any real case data is used.
+- **Tips are pinned in the clear while they sit in the tip portal.** A member of
+  the public has no account and no published key to seal a file to, so a tip
+  attachment is readable to anyone holding its CID until an officer acts on it.
+  Converting a tip into an evidence record re-pins an encrypted copy, so evidence
+  records are uniformly protected; the original unencrypted tip CID still exists
+  and cannot be unpinned by this system.
+- **Signature-derived keys are only as safe as the user's signing habits.** The
+  EIP-712 domain binds derivation to this application, chain and contract, and a
+  plain `personal_sign` prompt cannot reproduce it. But wallets do not bind a
+  signature to the requesting origin, so a site that reproduces the exact same
+  domain and struct can still obtain the signature from a user who approves it.
+  This is hardening, not an enforcement boundary.
+- **Key derivation assumes deterministic signatures.** The encryption keypair is
+  re-derived from a wallet signature rather than stored. This relies on
+  deterministic ECDSA (RFC 6979), which MetaMask implements. A wallet that signs
+  the same payload differently each time would derive a different key and be
+  unable to decrypt.
+- **A user must publish an encryption key before they can be granted access.** A
+  judge who has not clicked *Publish Key* cannot be sealed to, and police will be
+  told that no court can read the record.
 - **Tips are unlinked on-chain but not network-anonymous.** The contract stores
   and emits no submitter address, but the transaction's `from` address remains
   visible in the chain's public transaction history. A submitter who needs full
@@ -53,6 +74,33 @@ providing a guarantee it does not yet provide.
   on the server.
 
 ---
+
+## 🔐 How Encryption Works
+
+1. A user signs an EIP-712 payload whose domain carries the application name,
+   the chain id and the contract address. The hashed signature seeds an X25519
+   keypair, so the private key is never stored and can be re-derived on any
+   device, and a key derived against one deployment is not valid for another.
+   Only the public half is published on-chain.
+2. Submitting evidence generates a random AES-256-GCM content key. Every file in
+   the record is encrypted with it in the browser; only ciphertext reaches Pinata.
+3. The content key is sealed to each authorised reader's published key and stored
+   via `grantDecryptionKey`. Recipients must hold the Police or Court role: the
+   constructor registers and approves the admin, so without that check a content
+   key could be sealed to the account that is only meant to govern access. Each
+   grant appends an `AccessGranted` custody record.
+   Access can be extended later from the police dashboard, which is how a judge
+   approved after an upload gains access to historical records.
+4. A reader fetches their sealed key with `getMyWrappedKey`, which is scoped to
+   `msg.sender`, opens it with their re-derived private key, and decrypts the
+   file locally.
+
+This deliberately avoids MetaMask's `eth_getEncryptionPublicKey` and
+`eth_decrypt`. Both were deprecated in July 2022, are MetaMask-only and are
+unsupported on hardware wallets, which makes them a poor foundation for the one
+feature the system's confidentiality depends on.
+
+See Known Limitations for what signature-derived keys do **not** protect against.
 
 ## 🏗️ Technology Stack
 
@@ -159,6 +207,7 @@ The app runs at [http://localhost:3000](http://localhost:3000).
 - `npm run build`: Builds for production.
 - `npm run start`: Runs the production build.
 - `npm run lint`: Runs ESLint.
+- `npm test`: Runs the encryption tests via Node's built-in test runner.
 
 ---
 

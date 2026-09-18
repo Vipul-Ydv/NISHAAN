@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --experimental-strip-types --test src/utils/crypto.test.ts src/utils/encryptionFlow.test.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -18,7 +19,8 @@
     "next": "^16.1.6",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "three": "^0.183.2"
+    "three": "^0.183.2",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

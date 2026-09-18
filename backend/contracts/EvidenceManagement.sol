@@ -36,6 +36,19 @@ contract EvidenceManagement {
         string action; // "Viewed", "Verified", "StatusChanged"
     }
 
+    /// @notice One revision of a case document, anchored on-chain.
+    /// @dev Versions are append-only. A correction produces a new entry rather
+    /// than overwriting the previous CID, so the full revision trail stays
+    /// verifiable and no earlier state can be silently replaced.
+    struct DocumentVersion {
+        string ipfsHash;
+        string fileType;
+        string note;        // what changed in this revision
+        address author;
+        string authorName;
+        uint256 timestamp;
+    }
+
     // --- State Variables ---
     address public admin;
 
@@ -56,6 +69,28 @@ contract EvidenceManagement {
     // Anonymous Tips
     Tip[] public anonymousTips;
 
+    // Revision history: evidenceId => DocumentVersion[]
+    mapping(string => DocumentVersion[]) public documentVersions;
+
+    /**
+     * Published X25519 encryption public keys, one per user.
+     *
+     * Holding only public keys is deliberate: the contract must never be able to
+     * decrypt evidence. A user derives their keypair client-side and publishes
+     * the public half here so others can wrap content keys for them.
+     */
+    mapping(address => string) private encryptionPublicKeys;
+
+    /**
+     * Content keys, encrypted to a specific recipient.
+     * evidenceId => recipient => wrapped key.
+     *
+     * Each entry is the record's AES content key sealed to that recipient's
+     * published X25519 key. Only the recipient can open it, so the admin cannot
+     * read evidence even though the admin governs access.
+     */
+    mapping(string => mapping(address => string)) private wrappedKeys;
+
     // --- Events ---
     event EvidenceAdded(string evidenceId, uint256 fileCount, string officerName, uint256 timestamp);
     event EvidenceAccessed(string evidenceId, address accessedBy, uint256 timestamp);
@@ -65,6 +100,9 @@ contract EvidenceManagement {
     event UserRejected(address userAddress, address rejectedBy);
     event TipSubmitted(uint256 tipId, uint256 timestamp);
     event EvidenceAppended(string evidenceId, uint256 newFileCount, address appendedBy, uint256 timestamp);
+    event DocumentVersionAdded(string evidenceId, uint256 versionIndex, address author, uint256 timestamp);
+    event EncryptionKeyRegistered(address user, uint256 timestamp);
+    event DecryptionAccessGranted(string evidenceId, address grantedTo, address grantedBy, uint256 timestamp);
 
     // --- Modifiers ---
     modifier onlyAdmin() {
@@ -215,6 +253,74 @@ contract EvidenceManagement {
         emit EvidenceAppended(_evidenceId, _newIpfsHashes.length, msg.sender, block.timestamp);
     }
 
+    // --- Document Versioning ---
+
+    /// @notice Records a new revision of a case document.
+    /// @dev Append-only: earlier versions remain readable and their CIDs are
+    /// never mutated, which is what makes the revision trail tamper-evident.
+    function addDocumentVersion(
+        string memory _evidenceId,
+        string memory _ipfsHash,
+        string memory _fileType,
+        string memory _note
+    ) public onlyPolice onlyApproved {
+        require(evidenceRecords[_evidenceId].exists, "Evidence does not exist");
+        require(bytes(_ipfsHash).length > 0, "Version requires an IPFS hash");
+
+        documentVersions[_evidenceId].push(DocumentVersion({
+            ipfsHash: _ipfsHash,
+            fileType: _fileType,
+            note: _note,
+            author: msg.sender,
+            authorName: userNames[msg.sender],
+            timestamp: block.timestamp
+        }));
+
+        uint256 versionIndex = documentVersions[_evidenceId].length - 1;
+
+        chainOfCustody[_evidenceId].push(AccessRecord({
+            accessedBy: msg.sender,
+            accessorName: userNames[msg.sender],
+            accessorRole: userRoles[msg.sender],
+            timestamp: block.timestamp,
+            action: "VersionAdded"
+        }));
+
+        emit DocumentVersionAdded(_evidenceId, versionIndex, msg.sender, block.timestamp);
+    }
+
+    function getVersionCount(string memory _evidenceId) public view returns (uint256) {
+        return documentVersions[_evidenceId].length;
+    }
+
+    function getDocumentVersion(string memory _evidenceId, uint256 _index) public view returns (
+        string memory ipfsHash,
+        string memory fileType,
+        string memory note,
+        address author,
+        string memory authorName,
+        uint256 timestamp
+    ) {
+        require(_index < documentVersions[_evidenceId].length, "Version does not exist");
+        DocumentVersion memory v = documentVersions[_evidenceId][_index];
+        return (v.ipfsHash, v.fileType, v.note, v.author, v.authorName, v.timestamp);
+    }
+
+    /// @notice Convenience read for the current revision.
+    function getLatestVersion(string memory _evidenceId) public view returns (
+        string memory ipfsHash,
+        string memory fileType,
+        string memory note,
+        address author,
+        string memory authorName,
+        uint256 timestamp
+    ) {
+        uint256 count = documentVersions[_evidenceId].length;
+        require(count > 0, "No versions recorded");
+        DocumentVersion memory v = documentVersions[_evidenceId][count - 1];
+        return (v.ipfsHash, v.fileType, v.note, v.author, v.authorName, v.timestamp);
+    }
+
     function getEvidence(string memory _evidenceId) public onlyApproved returns (
         string[] memory ipfsHashes,
         string memory caseNumber,
@@ -298,6 +404,86 @@ contract EvidenceManagement {
         }));
 
         emit EvidenceStatusChanged(_evidenceId, _newStatus, msg.sender, block.timestamp);
+    }
+
+    // --- Encryption Key Directory ---
+
+    /// @notice Publishes the caller's X25519 encryption public key.
+    /// @dev Only the public half is ever sent on-chain. The private half is
+    /// derived client-side from a wallet signature and never leaves the browser.
+    function registerEncryptionKey(string memory _publicKey) public onlyApproved {
+        require(bytes(_publicKey).length > 0, "Public key required");
+        encryptionPublicKeys[msg.sender] = _publicKey;
+        emit EncryptionKeyRegistered(msg.sender, block.timestamp);
+    }
+
+    function getEncryptionPublicKey(address _user) public view returns (string memory) {
+        return encryptionPublicKeys[_user];
+    }
+
+    function hasEncryptionKey(address _user) public view returns (bool) {
+        return bytes(encryptionPublicKeys[_user]).length > 0;
+    }
+
+    // --- Decryption Access ---
+
+    /**
+     * @notice Grants a recipient the ability to decrypt one evidence record.
+     * @param _wrappedKey The record's content key, sealed to the recipient's
+     * published encryption key. The contract stores it but can never open it.
+     *
+     * Restricted to police because only the submitting side holds the plaintext
+     * content key. Granting is logged in the chain of custody, so who was given
+     * access to what is as auditable as who viewed it.
+     */
+    function grantDecryptionKey(
+        string memory _evidenceId,
+        address _recipient,
+        string memory _wrappedKey
+    ) public onlyPolice onlyApproved {
+        require(evidenceRecords[_evidenceId].exists, "Evidence does not exist");
+        require(registeredUsers[_recipient], "Recipient not registered");
+        require(bytes(_wrappedKey).length > 0, "Wrapped key required");
+
+        // The constructor registers and approves the admin, and the admin may
+        // publish an encryption key like anyone else. Without this check a
+        // police account could seal a content key to the admin, which would
+        // break the guarantee that governing access is not the same as reading
+        // evidence. Enforce it by role rather than trusting callers.
+        bytes32 recipientRole = keccak256(abi.encodePacked(userRoles[_recipient]));
+        require(
+            recipientRole == keccak256(abi.encodePacked("Police")) ||
+            recipientRole == keccak256(abi.encodePacked("Court")),
+            "Recipient must be Police or Court"
+        );
+        require(
+            bytes(encryptionPublicKeys[_recipient]).length > 0,
+            "Recipient has not published an encryption key"
+        );
+
+        wrappedKeys[_evidenceId][_recipient] = _wrappedKey;
+
+        chainOfCustody[_evidenceId].push(AccessRecord({
+            accessedBy: msg.sender,
+            accessorName: userNames[msg.sender],
+            accessorRole: userRoles[msg.sender],
+            timestamp: block.timestamp,
+            action: "AccessGranted"
+        }));
+
+        emit DecryptionAccessGranted(_evidenceId, _recipient, msg.sender, block.timestamp);
+    }
+
+    /// @notice Returns the caller's own wrapped content key for a record.
+    /// @dev Scoped to msg.sender so one user cannot fetch another's sealed key.
+    /// It would be useless to them anyway, but not exposing it is cheaper than
+    /// arguing about it.
+    function getMyWrappedKey(string memory _evidenceId) public view returns (string memory) {
+        return wrappedKeys[_evidenceId][msg.sender];
+    }
+
+    function hasDecryptionAccess(string memory _evidenceId, address _user) public view returns (bool) {
+        return bytes(wrappedKeys[_evidenceId][_user]).length > 0;
     }
 
     // --- Chain of Custody ---
