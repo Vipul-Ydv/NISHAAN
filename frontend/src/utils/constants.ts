@@ -1,4 +1,22 @@
-export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+// The deployed EvidenceManagement address. Set NEXT_PUBLIC_CONTRACT_ADDRESS in
+// .env.local to the address printed by `npm run deploy:local` or `deploy:sepolia`.
+// There is deliberately no fallback: a hardcoded default silently points the app
+// at a contract that does not exist on the connected network.
+export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS ?? "";
+
+/** Throws with an actionable message when the contract address is unset or malformed. */
+export function assertContractAddress(): string {
+    if (!CONTRACT_ADDRESS) {
+        throw new Error(
+            "NEXT_PUBLIC_CONTRACT_ADDRESS is not set. Deploy the contract and add the " +
+            "address to frontend/.env.local, then restart the dev server."
+        );
+    }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(CONTRACT_ADDRESS)) {
+        throw new Error(`NEXT_PUBLIC_CONTRACT_ADDRESS is not a valid address: ${CONTRACT_ADDRESS}`);
+    }
+    return CONTRACT_ADDRESS;
+}
 
 export const CONTRACT_ABI = [
     {
