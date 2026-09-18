@@ -70,26 +70,17 @@ export default function Whistleblower() {
     };
 
     const uploadToPinata = async (fileToUpload: File) => {
-        const url = `https://api.pinata.cloud/pinning/pinFileToIPFS`;
+        // The Pinata credentials live server-side; this route returns only the CID.
         const data = new FormData();
         data.append('file', fileToUpload);
-        const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
-        const pinataSecretApiKey = process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY;
 
-        if (!pinataApiKey || !pinataSecretApiKey) {
-            throw new Error("Pinata API keys are missing");
+        const res = await fetch("/api/ipfs/upload", { method: "POST", body: data });
+
+        if (!res.ok) {
+            const { error } = await res.json().catch(() => ({ error: "" }));
+            throw new Error(error || `IPFS upload failed with status ${res.status}`);
         }
 
-        const res = await fetch(url, {
-            method: "POST",
-            headers: {
-                pinata_api_key: pinataApiKey,
-                pinata_secret_api_key: pinataSecretApiKey,
-            },
-            body: data,
-        });
-
-        if (!res.ok) throw new Error("Pinata upload failed");
         const responseData = await res.json();
         return responseData.IpfsHash;
     };
@@ -107,7 +98,7 @@ export default function Whistleblower() {
         try {
             const hash = await uploadToPinata(file);
 
-            setStatusMessage("File locked. Submitting anonymous transaction to Ethereum...");
+            setStatusMessage("File pinned. Submitting tip transaction to Ethereum...");
 
             const tx = await contract.submitAnonymousTip(hash, description);
 
@@ -196,7 +187,7 @@ export default function Whistleblower() {
                             </div>
 
                             <div className="space-y-2">
-                                <label className="text-xs font-black uppercase tracking-widest text-zinc-500">Encrypted Asset Upload</label>
+                                <label className="text-xs font-black uppercase tracking-widest text-zinc-500">Evidence File Upload</label>
                                 <div className={`relative h-48 border-2 border-dashed flex flex-col items-center justify-center transition-all ${file ? 'border-red-500 bg-red-500/10' : 'border-zinc-700 hover:border-zinc-500 bg-zinc-900'}`}>
                                     <input
                                         required type="file" onChange={handleFileChange}

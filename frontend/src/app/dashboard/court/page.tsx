@@ -355,7 +355,7 @@ export default function CourtDashboard() {
                                     <Database size={64} className="text-black mb-4" />
                                     <h3 className="text-2xl font-black uppercase tracking-tighter text-black">Awaiting Query</h3>
                                     <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-black/40 mt-2 max-w-xs leading-relaxed">
-                                        The judicial node is idle. Enter an Evidence ID to pull encrypted records from the master ledger.
+                                        The judicial node is idle. Enter an Evidence ID to pull records from the master ledger.
                                     </p>
                                 </motion.div>
                             )}

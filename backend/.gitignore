@@ -7,3 +7,7 @@ coverage/
 coverage.json
 # Ignore the generated config holding API keys if it's there
 public/config.js
+# Generated at deploy time and network-specific - never commit, it goes stale
+# and misleads the next person about which contract the frontend should target.
+address.txt
+deploy_output.txt

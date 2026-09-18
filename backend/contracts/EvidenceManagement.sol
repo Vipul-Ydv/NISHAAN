@@ -7,11 +7,13 @@ contract EvidenceManagement {
     enum UserStatus { Pending, Approved, Rejected }
 
     // --- Structs ---
+    // No submitter is stored. Persisting msg.sender would permanently bind a
+    // whistleblower's wallet to their tip, which defeats the purpose of the
+    // portal. See submitAnonymousTip for the limits of this guarantee.
     struct Tip {
         string ipfsHash;
         string description;
         uint256 timestamp;
-        address submitter;
     }
 
     struct Evidence {
@@ -61,7 +63,7 @@ contract EvidenceManagement {
     event UserRegistered(address userAddress, string role, string name);
     event UserApproved(address userAddress, string role, address approvedBy);
     event UserRejected(address userAddress, address rejectedBy);
-    event TipSubmitted(uint256 tipId, address submitter, uint256 timestamp);
+    event TipSubmitted(uint256 tipId, uint256 timestamp);
     event EvidenceAppended(string evidenceId, uint256 newFileCount, address appendedBy, uint256 timestamp);
 
     // --- Modifiers ---
@@ -347,14 +349,18 @@ contract EvidenceManagement {
     }
 
     // --- Whistleblower ---
+    /// @notice Records an anonymous tip without linking it to the sender.
+    /// @dev The contract stores and emits no submitter address. Note that the
+    /// transaction's `from` address is still public in the chain's transaction
+    /// history - on-chain storage cannot hide that. A submitter who needs full
+    /// anonymity must use a wallet that is not tied to their identity.
     function submitAnonymousTip(string memory _ipfsHash, string memory _description) public {
         anonymousTips.push(Tip({
             ipfsHash: _ipfsHash,
             description: _description,
-            timestamp: block.timestamp,
-            submitter: msg.sender
+            timestamp: block.timestamp
         }));
-        emit TipSubmitted(anonymousTips.length - 1, msg.sender, block.timestamp);
+        emit TipSubmitted(anonymousTips.length - 1, block.timestamp);
     }
 
     function getTipsCount() public view returns (uint256) {
@@ -364,10 +370,9 @@ contract EvidenceManagement {
     function getTip(uint256 _index) public view returns (
         string memory ipfsHash,
         string memory description,
-        uint256 timestamp,
-        address submitter
+        uint256 timestamp
     ) {
         Tip memory t = anonymousTips[_index];
-        return (t.ipfsHash, t.description, t.timestamp, t.submitter);
+        return (t.ipfsHash, t.description, t.timestamp);
     }
 }

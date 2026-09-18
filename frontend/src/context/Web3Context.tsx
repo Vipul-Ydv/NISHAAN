@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { ethers } from "ethers";
-import { CONTRACT_ADDRESS, CONTRACT_ABI } from "../utils/constants";
+import { CONTRACT_ADDRESS, CONTRACT_ABI, assertContractAddress } from "../utils/constants";
 
 declare global {
     interface Window {
@@ -70,7 +70,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
                     _runner = await _provider.getSigner();
                 }
 
-                const _contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, _runner);
+                const _contract = new ethers.Contract(assertContractAddress(), CONTRACT_ABI, _runner);
                 setContract(_contract);
 
                 // Listen for accounts change
@@ -153,7 +153,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
             if (accounts.length > 0) {
                 setAccount(accounts[0]);
                 const _signer = await currentProvider.getSigner();
-                const _contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, _signer);
+                const _contract = new ethers.Contract(assertContractAddress(), CONTRACT_ABI, _signer);
                 setContract(_contract);
                 await checkUserStatus(accounts[0], _contract);
             }
@@ -170,7 +170,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
         try {
             setIsLoading(true);
             const _signer = await provider.getSigner();
-            const _contractWithSigner = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, _signer);
+            const _contractWithSigner = new ethers.Contract(assertContractAddress(), CONTRACT_ABI, _signer);
 
             const tx = await _contractWithSigner.registerUser(name, selectedRole);
             await tx.wait();
