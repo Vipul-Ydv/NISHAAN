@@ -279,6 +279,125 @@ describe("EvidenceManagement", function () {
         });
     });
 
+    describe("encryption key directory", function () {
+        beforeEach(async function () {
+            await onboard(police, "Officer Rane", "Police");
+            await onboard(court, "Judge Menon", "Court");
+        });
+
+        it("publishes a public key for an approved user", async function () {
+            await contract.connect(court).registerEncryptionKey("court-x25519-pubkey");
+
+            expect(await contract.hasEncryptionKey(court.address)).to.equal(true);
+            expect(await contract.getEncryptionPublicKey(court.address)).to.equal("court-x25519-pubkey");
+        });
+
+        it("reports no key before registration", async function () {
+            expect(await contract.hasEncryptionKey(police.address)).to.equal(false);
+            expect(await contract.getEncryptionPublicKey(police.address)).to.equal("");
+        });
+
+        it("lets a user replace their key", async function () {
+            await contract.connect(court).registerEncryptionKey("first-key");
+            await contract.connect(court).registerEncryptionKey("second-key");
+            expect(await contract.getEncryptionPublicKey(court.address)).to.equal("second-key");
+        });
+
+        it("blocks an unapproved user from registering", async function () {
+            await expect(
+                contract.connect(outsider).registerEncryptionKey("nope")
+            ).to.be.revertedWith("User not approved by admin");
+        });
+
+        it("rejects an empty key", async function () {
+            await expect(
+                contract.connect(court).registerEncryptionKey("")
+            ).to.be.revertedWith("Public key required");
+        });
+
+        it("emits EncryptionKeyRegistered", async function () {
+            await expect(contract.connect(court).registerEncryptionKey("k"))
+                .to.emit(contract, "EncryptionKeyRegistered");
+        });
+    });
+
+    describe("decryption access", function () {
+        beforeEach(async function () {
+            await onboard(police, "Officer Rane", "Police");
+            await onboard(court, "Judge Menon", "Court");
+            await contract.connect(court).registerEncryptionKey("court-x25519-pubkey");
+            await contract.connect(police).addEvidence(
+                "EV-1", ["QmCiphertext"], "FIR/2026/001", "Pune", "Theft", ["application/pdf"]
+            );
+        });
+
+        it("grants a wrapped key the recipient can read back", async function () {
+            await contract.connect(police).grantDecryptionKey("EV-1", court.address, "sealed-for-court");
+
+            expect(await contract.hasDecryptionAccess("EV-1", court.address)).to.equal(true);
+            expect(await contract.connect(court).getMyWrappedKey("EV-1")).to.equal("sealed-for-court");
+        });
+
+        it("does not give the admin a key, so the admin cannot decrypt", async function () {
+            await contract.connect(police).grantDecryptionKey("EV-1", court.address, "sealed-for-court");
+
+            // The whole point of the design: governing access is not reading evidence.
+            expect(await contract.hasDecryptionAccess("EV-1", admin.address)).to.equal(false);
+            expect(await contract.connect(admin).getMyWrappedKey("EV-1")).to.equal("");
+        });
+
+        it("scopes getMyWrappedKey to the caller", async function () {
+            await contract.connect(police).grantDecryptionKey("EV-1", court.address, "sealed-for-court");
+
+            // Police granted it but was not itself a recipient.
+            expect(await contract.connect(police).getMyWrappedKey("EV-1")).to.equal("");
+        });
+
+        it("logs the grant in the chain of custody", async function () {
+            await contract.connect(police).grantDecryptionKey("EV-1", court.address, "sealed-for-court");
+
+            expect(await contract.getChainOfCustodyLength("EV-1")).to.equal(2n);
+            const record = await contract.getChainOfCustodyRecord("EV-1", 1);
+            expect(record.action).to.equal("AccessGranted");
+            expect(record.accessorRole).to.equal("Police");
+        });
+
+        it("refuses a recipient who has published no encryption key", async function () {
+            await expect(
+                contract.connect(police).grantDecryptionKey("EV-1", police.address, "sealed")
+            ).to.be.revertedWith("Recipient has not published an encryption key");
+        });
+
+        it("refuses an unregistered recipient", async function () {
+            await expect(
+                contract.connect(police).grantDecryptionKey("EV-1", outsider.address, "sealed")
+            ).to.be.revertedWith("Recipient not registered");
+        });
+
+        it("refuses an unknown evidence id", async function () {
+            await expect(
+                contract.connect(police).grantDecryptionKey("EV-404", court.address, "sealed")
+            ).to.be.revertedWith("Evidence does not exist");
+        });
+
+        it("refuses an empty wrapped key", async function () {
+            await expect(
+                contract.connect(police).grantDecryptionKey("EV-1", court.address, "")
+            ).to.be.revertedWith("Wrapped key required");
+        });
+
+        it("blocks a court official from granting access", async function () {
+            await expect(
+                contract.connect(court).grantDecryptionKey("EV-1", court.address, "self-grant")
+            ).to.be.revertedWith("Only police officers can perform this action");
+        });
+
+        it("emits DecryptionAccessGranted", async function () {
+            await expect(contract.connect(police).grantDecryptionKey("EV-1", court.address, "sealed"))
+                .to.emit(contract, "DecryptionAccessGranted");
+        });
+    });
+
     describe("anonymous tips", function () {
         it("stores a tip without any submitter address", async function () {
             await contract.connect(outsider).submitAnonymousTip("QmTip", "Saw a handoff near the docks");
