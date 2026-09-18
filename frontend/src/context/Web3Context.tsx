@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { ethers } from "ethers";
-import { CONTRACT_ADDRESS, CONTRACT_ABI, assertContractAddress } from "../utils/constants";
+import { CONTRACT_ABI, assertContractAddress } from "../utils/constants";
 
 declare global {
     interface Window {
