@@ -46,6 +46,11 @@ providing a guarantee it does not yet provide.
   `getEvidenceData` for a free read that does not log access.
 - **No key rotation or revocation.** A rejected user's prior access records
   remain, by design, but there is no mechanism to revoke an approved account.
+- **The IPFS upload route is unauthenticated.** `/api/ipfs/upload` enforces a
+  25 MB cap and a per-instance rate limit, but it does not verify that the caller
+  is an approved officer. Anyone who can reach the deployment can spend the
+  project's Pinata quota. Restricting it requires wallet signature verification
+  on the server.
 
 ---
 
