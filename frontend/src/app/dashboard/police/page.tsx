@@ -179,30 +179,16 @@ export default function PoliceDashboard() {
         }
     };
 
-    // Original Logic: Pinata
     const uploadToPinata = async (fileToUpload: File) => {
-        const url = `https://api.pinata.cloud/pinning/pinFileToIPFS`;
+        // The Pinata credentials live server-side; this route returns only the CID.
         const data = new FormData();
         data.append('file', fileToUpload);
-        const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
-        const pinataSecretApiKey = process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY;
 
-        if (!pinataApiKey || !pinataSecretApiKey) {
-            throw new Error("Pinata API keys are missing in .env.local");
-        }
-
-        const res = await fetch(url, {
-            method: "POST",
-            headers: {
-                pinata_api_key: pinataApiKey,
-                pinata_secret_api_key: pinataSecretApiKey,
-            },
-            body: data,
-        });
+        const res = await fetch("/api/ipfs/upload", { method: "POST", body: data });
 
         if (!res.ok) {
-            const errorData = await res.json().catch(() => ({}));
-            throw new Error(`Pinata upload failed: ${res.status} - ${JSON.stringify(errorData)}`);
+            const { error } = await res.json().catch(() => ({ error: "" }));
+            throw new Error(error || `IPFS upload failed with status ${res.status}`);
         }
 
         const responseData = await res.json();
