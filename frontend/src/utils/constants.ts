@@ -153,12 +153,6 @@ export const CONTRACT_ABI = [
             },
             {
                 "indexed": false,
-                "internalType": "address",
-                "name": "submitter",
-                "type": "address"
-            },
-            {
-                "indexed": false,
                 "internalType": "uint256",
                 "name": "timestamp",
                 "type": "uint256"
@@ -311,11 +305,6 @@ export const CONTRACT_ABI = [
                 "internalType": "uint256",
                 "name": "timestamp",
                 "type": "uint256"
-            },
-            {
-                "internalType": "address",
-                "name": "submitter",
-                "type": "address"
             }
         ],
         "stateMutability": "view",
@@ -756,11 +745,6 @@ export const CONTRACT_ABI = [
                 "internalType": "uint256",
                 "name": "timestamp",
                 "type": "uint256"
-            },
-            {
-                "internalType": "address",
-                "name": "submitter",
-                "type": "address"
             }
         ],
         "stateMutability": "view",

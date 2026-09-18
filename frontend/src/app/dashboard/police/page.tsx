@@ -153,7 +153,7 @@ export default function PoliceDashboard() {
             const tipsCount = await contract.getTipsCount();
             for (let i = 0; i < Number(tipsCount); i++) {
                 const tip = await contract.getTip(i);
-                tipsArr.push({ hash: tip[0], desc: tip[1], timestamp: Number(tip[2]), submitter: tip[3] });
+                tipsArr.push({ hash: tip[0], desc: tip[1], timestamp: Number(tip[2]) });
             }
             setAllTips(tipsArr.reverse());
         } catch (err) {
