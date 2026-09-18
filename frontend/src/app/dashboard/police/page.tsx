@@ -74,6 +74,16 @@ function JusticeNetworkBackground() {
     return <div ref={containerRef} className="fixed inset-0 -z-10 bg-white" />;
 }
 
+/** One on-chain revision of a case document. */
+interface VersionEntry {
+    index: number;
+    ipfsHash: string;
+    fileType: string;
+    note: string;
+    authorName: string;
+    timestamp: number;
+}
+
 export default function PoliceDashboard() {
     const { account, role, status, isApproved, contract, isLoading } = useWeb3();
     const router = useRouter();
@@ -90,6 +100,12 @@ export default function PoliceDashboard() {
     const [expandedEvidence, setExpandedEvidence] = useState<string | null>(null);
     const [appendFiles, setAppendFiles] = useState<File[]>([]);
     const [isAppending, setIsAppending] = useState(false);
+
+    // Document revisions, keyed by evidence id.
+    const [versionFile, setVersionFile] = useState<File | null>(null);
+    const [versionNote, setVersionNote] = useState("");
+    const [isVersioning, setIsVersioning] = useState(false);
+    const [caseVersions, setCaseVersions] = useState<Record<string, VersionEntry[]>>({});
 
     // Missing Original/Added States
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -193,6 +209,66 @@ export default function PoliceDashboard() {
 
         const responseData = await res.json();
         return responseData.IpfsHash;
+    };
+
+    /** Reads the revision trail for one case so the panel can show it. */
+    const loadVersionsFor = async (targetEvidenceId: string) => {
+        if (!contract) return;
+        try {
+            const count = Number(await contract.getVersionCount(targetEvidenceId));
+            const list: VersionEntry[] = [];
+            for (let i = 0; i < count; i++) {
+                const v = await contract.getDocumentVersion(targetEvidenceId, i);
+                list.push({
+                    index: i,
+                    ipfsHash: v[0],
+                    fileType: v[1],
+                    note: v[2],
+                    authorName: v[4],
+                    timestamp: Number(v[5]),
+                });
+            }
+            setCaseVersions((prev) => ({ ...prev, [targetEvidenceId]: list }));
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    /**
+     * Records a corrected document as a new revision.
+     *
+     * This is distinct from appending files: an append adds further material to
+     * the case, while a revision supersedes a document. Earlier versions stay
+     * on-chain and readable, which is what makes the trail auditable.
+     */
+    const handleAddVersion = async (e: React.FormEvent, targetEvidenceId: string) => {
+        e.preventDefault();
+        if (!versionFile || !contract) return;
+
+        setIsVersioning(true);
+        setStatusMessage("Uploading revised document to IPFS...");
+
+        try {
+            const hash = await uploadToPinata(versionFile);
+            const fileType = versionFile.type || "application/octet-stream";
+
+            setStatusMessage("Document pinned. Anchoring revision on the blockchain...");
+            const tx = await contract.addDocumentVersion(targetEvidenceId, hash, fileType, versionNote);
+            await tx.wait();
+
+            setStatusMessage("\u2705 Revision recorded. Earlier versions remain intact.");
+            setVersionFile(null);
+            setVersionNote("");
+            await loadVersionsFor(targetEvidenceId);
+            fetchAllEvidence();
+
+            setTimeout(() => setStatusMessage(""), 5000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`\u274c Error recording revision: ${err.message}`);
+        } finally {
+            setIsVersioning(false);
+        }
     };
 
     // Append Files
@@ -708,7 +784,11 @@ export default function PoliceDashboard() {
                                                         {/* Header summary */}
                                                         <div 
                                                             className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 cursor-pointer"
-                                                            onClick={() => setExpandedEvidence(expandedEvidence === evidence.id ? null : evidence.id)}
+                                                            onClick={() => {
+                                                                const opening = expandedEvidence !== evidence.id;
+                                                                setExpandedEvidence(opening ? evidence.id : null);
+                                                                if (opening) loadVersionsFor(evidence.id);
+                                                            }}
                                                         >
                                                             <div className="flex flex-col gap-2">
                                                                 <div className="flex items-center gap-3">
@@ -770,6 +850,84 @@ export default function PoliceDashboard() {
                                                                             ))}
                                                                         </div>
                                                                     </div>
+                                                                </div>
+
+                                                                {/* Revision History */}
+                                                                <div className="border-[4px] border-black p-6 bg-white mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-4 flex items-center gap-2">
+                                                                        <FileStack size={16} /> Revision History ({(caseVersions[evidence.id] || []).length})
+                                                                    </h4>
+
+                                                                    {(caseVersions[evidence.id] || []).length === 0 ? (
+                                                                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                                                            No revisions. The original submission is the current document.
+                                                                        </p>
+                                                                    ) : (
+                                                                        <ol className="space-y-3">
+                                                                            {[...(caseVersions[evidence.id] || [])].reverse().map((version) => (
+                                                                                <li key={version.index} className="border-[3px] border-black p-4 bg-zinc-50">
+                                                                                    <div className="flex items-start justify-between gap-3 mb-2">
+                                                                                        <span className="bg-black text-white px-2 py-1 text-[9px] font-black uppercase tracking-widest shrink-0">
+                                                                                            v{version.index + 1}
+                                                                                            {version.index === (caseVersions[evidence.id] || []).length - 1 && " - current"}
+                                                                                        </span>
+                                                                                        <span className="font-mono text-[9px] font-black uppercase text-zinc-500 text-right">
+                                                                                            {new Date(version.timestamp * 1000).toLocaleString()}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    <p className="text-xs font-bold mb-2 leading-snug">{version.note || "No note recorded"}</p>
+                                                                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                                                        <span className="font-mono text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                                                                            By {version.authorName}
+                                                                                        </span>
+                                                                                        <a
+                                                                                            href={`https://ipfs.io/ipfs/${version.ipfsHash}`}
+                                                                                            target="_blank" rel="noreferrer"
+                                                                                            className="border-[2px] border-black px-3 py-1 text-[9px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors"
+                                                                                        >
+                                                                                            Open v{version.index + 1}
+                                                                                        </a>
+                                                                                    </div>
+                                                                                </li>
+                                                                            ))}
+                                                                        </ol>
+                                                                    )}
+                                                                </div>
+
+                                                                {/* Record a Revision */}
+                                                                <div className="border-[4px] border-dashed border-black/40 p-6 bg-zinc-50 mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-2 flex items-center gap-2">
+                                                                        <UploadCloud size={16} /> Record New Version
+                                                                    </h4>
+                                                                    <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-4">
+                                                                        Supersedes the document. Earlier versions stay on-chain.
+                                                                    </p>
+                                                                    <form onSubmit={(e) => handleAddVersion(e, evidence.id)} className="flex flex-col gap-4">
+                                                                        <div className="flex-1 border-[3px] border-black bg-white flex items-center justify-between px-4 py-2 hover:bg-zinc-100 transition-colors cursor-pointer relative">
+                                                                            <input
+                                                                                type="file" required
+                                                                                onChange={(e) => setVersionFile(e.target.files?.[0] || null)}
+                                                                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                                                            />
+                                                                            <span className="font-mono text-xs font-bold uppercase truncate max-w-[220px]">
+                                                                                {versionFile ? versionFile.name : "Select revised document"}
+                                                                            </span>
+                                                                            <FileStack size={16} />
+                                                                        </div>
+                                                                        <input
+                                                                            type="text" required value={versionNote}
+                                                                            onChange={(e) => setVersionNote(e.target.value)}
+                                                                            placeholder="What changed in this revision?"
+                                                                            className="border-[3px] border-black px-4 py-3 font-mono text-xs font-bold focus:outline-none focus:bg-white bg-white"
+                                                                        />
+                                                                        <button
+                                                                            type="submit"
+                                                                            disabled={isVersioning || !versionFile}
+                                                                            className="px-6 py-3 bg-black text-white font-black uppercase text-xs tracking-widest hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 border-[3px] border-black"
+                                                                        >
+                                                                            {isVersioning ? <><Loader2 size={16} className="animate-spin" /> Anchoring...</> : 'Record Version'}
+                                                                        </button>
+                                                                    </form>
                                                                 </div>
 
                                                                 {/* Append Section */}
