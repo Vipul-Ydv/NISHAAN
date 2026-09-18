@@ -187,6 +187,98 @@ describe("EvidenceManagement", function () {
         });
     });
 
+    describe("document versioning", function () {
+        beforeEach(async function () {
+            await onboard(police, "Officer Rane", "Police");
+            await onboard(court, "Judge Menon", "Court");
+            await contract.connect(police).addEvidence(
+                "EV-1", ["QmOriginal"], "FIR/2026/001", "Pune", "Theft", ["application/pdf"]
+            );
+        });
+
+        it("starts with no versions", async function () {
+            expect(await contract.getVersionCount("EV-1")).to.equal(0n);
+        });
+
+        it("records a revision with its author and note", async function () {
+            await contract.connect(police).addDocumentVersion(
+                "EV-1", "QmV1", "application/pdf", "Corrected the complainant address"
+            );
+
+            expect(await contract.getVersionCount("EV-1")).to.equal(1n);
+
+            const version = await contract.getDocumentVersion("EV-1", 0);
+            expect(version.ipfsHash).to.equal("QmV1");
+            expect(version.note).to.equal("Corrected the complainant address");
+            expect(version.author).to.equal(police.address);
+            expect(version.authorName).to.equal("Officer Rane");
+        });
+
+        it("keeps earlier versions unchanged when a new one is added", async function () {
+            await contract.connect(police).addDocumentVersion("EV-1", "QmV1", "application/pdf", "first revision");
+            await contract.connect(police).addDocumentVersion("EV-1", "QmV2", "application/pdf", "second revision");
+
+            expect(await contract.getVersionCount("EV-1")).to.equal(2n);
+
+            // The whole point of the feature: v1 is still readable and untouched.
+            const first = await contract.getDocumentVersion("EV-1", 0);
+            expect(first.ipfsHash).to.equal("QmV1");
+            expect(first.note).to.equal("first revision");
+
+            const second = await contract.getDocumentVersion("EV-1", 1);
+            expect(second.ipfsHash).to.equal("QmV2");
+        });
+
+        it("returns the newest revision from getLatestVersion", async function () {
+            await contract.connect(police).addDocumentVersion("EV-1", "QmV1", "application/pdf", "first");
+            await contract.connect(police).addDocumentVersion("EV-1", "QmV2", "application/pdf", "second");
+
+            const latest = await contract.getLatestVersion("EV-1");
+            expect(latest.ipfsHash).to.equal("QmV2");
+            expect(latest.note).to.equal("second");
+        });
+
+        it("logs every revision in the chain of custody", async function () {
+            await contract.connect(police).addDocumentVersion("EV-1", "QmV1", "application/pdf", "first");
+
+            expect(await contract.getChainOfCustodyLength("EV-1")).to.equal(2n);
+            const record = await contract.getChainOfCustodyRecord("EV-1", 1);
+            expect(record.action).to.equal("VersionAdded");
+            expect(record.accessorName).to.equal("Officer Rane");
+        });
+
+        it("emits DocumentVersionAdded with the version index", async function () {
+            await expect(contract.connect(police).addDocumentVersion("EV-1", "QmV1", "application/pdf", "first"))
+                .to.emit(contract, "DocumentVersionAdded");
+        });
+
+        it("blocks a court official from adding a version", async function () {
+            await expect(
+                contract.connect(court).addDocumentVersion("EV-1", "QmV1", "application/pdf", "tampering")
+            ).to.be.revertedWith("Only police officers can perform this action");
+        });
+
+        it("rejects a version on an unknown evidence id", async function () {
+            await expect(
+                contract.connect(police).addDocumentVersion("EV-404", "QmV1", "application/pdf", "x")
+            ).to.be.revertedWith("Evidence does not exist");
+        });
+
+        it("rejects a version with no IPFS hash", async function () {
+            await expect(
+                contract.connect(police).addDocumentVersion("EV-1", "", "application/pdf", "x")
+            ).to.be.revertedWith("Version requires an IPFS hash");
+        });
+
+        it("rejects reading past the end of the history", async function () {
+            await expect(contract.getDocumentVersion("EV-1", 0)).to.be.revertedWith("Version does not exist");
+        });
+
+        it("rejects getLatestVersion when nothing is recorded", async function () {
+            await expect(contract.getLatestVersion("EV-1")).to.be.revertedWith("No versions recorded");
+        });
+    });
+
     describe("anonymous tips", function () {
         it("stores a tip without any submitter address", async function () {
             await contract.connect(outsider).submitAnonymousTip("QmTip", "Saw a handoff near the docks");

@@ -36,6 +36,19 @@ contract EvidenceManagement {
         string action; // "Viewed", "Verified", "StatusChanged"
     }
 
+    /// @notice One revision of a case document, anchored on-chain.
+    /// @dev Versions are append-only. A correction produces a new entry rather
+    /// than overwriting the previous CID, so the full revision trail stays
+    /// verifiable and no earlier state can be silently replaced.
+    struct DocumentVersion {
+        string ipfsHash;
+        string fileType;
+        string note;        // what changed in this revision
+        address author;
+        string authorName;
+        uint256 timestamp;
+    }
+
     // --- State Variables ---
     address public admin;
 
@@ -56,6 +69,9 @@ contract EvidenceManagement {
     // Anonymous Tips
     Tip[] public anonymousTips;
 
+    // Revision history: evidenceId => DocumentVersion[]
+    mapping(string => DocumentVersion[]) public documentVersions;
+
     // --- Events ---
     event EvidenceAdded(string evidenceId, uint256 fileCount, string officerName, uint256 timestamp);
     event EvidenceAccessed(string evidenceId, address accessedBy, uint256 timestamp);
@@ -65,6 +81,7 @@ contract EvidenceManagement {
     event UserRejected(address userAddress, address rejectedBy);
     event TipSubmitted(uint256 tipId, uint256 timestamp);
     event EvidenceAppended(string evidenceId, uint256 newFileCount, address appendedBy, uint256 timestamp);
+    event DocumentVersionAdded(string evidenceId, uint256 versionIndex, address author, uint256 timestamp);
 
     // --- Modifiers ---
     modifier onlyAdmin() {
@@ -213,6 +230,74 @@ contract EvidenceManagement {
         }));
         
         emit EvidenceAppended(_evidenceId, _newIpfsHashes.length, msg.sender, block.timestamp);
+    }
+
+    // --- Document Versioning ---
+
+    /// @notice Records a new revision of a case document.
+    /// @dev Append-only: earlier versions remain readable and their CIDs are
+    /// never mutated, which is what makes the revision trail tamper-evident.
+    function addDocumentVersion(
+        string memory _evidenceId,
+        string memory _ipfsHash,
+        string memory _fileType,
+        string memory _note
+    ) public onlyPolice onlyApproved {
+        require(evidenceRecords[_evidenceId].exists, "Evidence does not exist");
+        require(bytes(_ipfsHash).length > 0, "Version requires an IPFS hash");
+
+        documentVersions[_evidenceId].push(DocumentVersion({
+            ipfsHash: _ipfsHash,
+            fileType: _fileType,
+            note: _note,
+            author: msg.sender,
+            authorName: userNames[msg.sender],
+            timestamp: block.timestamp
+        }));
+
+        uint256 versionIndex = documentVersions[_evidenceId].length - 1;
+
+        chainOfCustody[_evidenceId].push(AccessRecord({
+            accessedBy: msg.sender,
+            accessorName: userNames[msg.sender],
+            accessorRole: userRoles[msg.sender],
+            timestamp: block.timestamp,
+            action: "VersionAdded"
+        }));
+
+        emit DocumentVersionAdded(_evidenceId, versionIndex, msg.sender, block.timestamp);
+    }
+
+    function getVersionCount(string memory _evidenceId) public view returns (uint256) {
+        return documentVersions[_evidenceId].length;
+    }
+
+    function getDocumentVersion(string memory _evidenceId, uint256 _index) public view returns (
+        string memory ipfsHash,
+        string memory fileType,
+        string memory note,
+        address author,
+        string memory authorName,
+        uint256 timestamp
+    ) {
+        require(_index < documentVersions[_evidenceId].length, "Version does not exist");
+        DocumentVersion memory v = documentVersions[_evidenceId][_index];
+        return (v.ipfsHash, v.fileType, v.note, v.author, v.authorName, v.timestamp);
+    }
+
+    /// @notice Convenience read for the current revision.
+    function getLatestVersion(string memory _evidenceId) public view returns (
+        string memory ipfsHash,
+        string memory fileType,
+        string memory note,
+        address author,
+        string memory authorName,
+        uint256 timestamp
+    ) {
+        uint256 count = documentVersions[_evidenceId].length;
+        require(count > 0, "No versions recorded");
+        DocumentVersion memory v = documentVersions[_evidenceId][count - 1];
+        return (v.ipfsHash, v.fileType, v.note, v.author, v.authorName, v.timestamp);
     }
 
     function getEvidence(string memory _evidenceId) public onlyApproved returns (

@@ -35,6 +35,37 @@ export const CONTRACT_ABI = [
             },
             {
                 "indexed": false,
+                "internalType": "uint256",
+                "name": "versionIndex",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "address",
+                "name": "author",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "timestamp",
+                "type": "uint256"
+            }
+        ],
+        "name": "DocumentVersionAdded",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "evidenceId",
+                "type": "string"
+            },
+            {
+                "indexed": false,
                 "internalType": "address",
                 "name": "accessedBy",
                 "type": "address"
@@ -238,6 +269,34 @@ export const CONTRACT_ABI = [
                 "type": "string"
             },
             {
+                "internalType": "string",
+                "name": "_ipfsHash",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "_fileType",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "_note",
+                "type": "string"
+            }
+        ],
+        "name": "addDocumentVersion",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "_evidenceId",
+                "type": "string"
+            },
+            {
                 "internalType": "string[]",
                 "name": "_ipfsHashes",
                 "type": "string[]"
@@ -393,6 +452,55 @@ export const CONTRACT_ABI = [
     {
         "inputs": [
             {
+                "internalType": "string",
+                "name": "",
+                "type": "string"
+            },
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "name": "documentVersions",
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "ipfsHash",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "fileType",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "note",
+                "type": "string"
+            },
+            {
+                "internalType": "address",
+                "name": "author",
+                "type": "address"
+            },
+            {
+                "internalType": "string",
+                "name": "authorName",
+                "type": "string"
+            },
+            {
+                "internalType": "uint256",
+                "name": "timestamp",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
                 "internalType": "uint256",
                 "name": "",
                 "type": "uint256"
@@ -529,6 +637,55 @@ export const CONTRACT_ABI = [
                 "internalType": "string",
                 "name": "action",
                 "type": "string"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "_evidenceId",
+                "type": "string"
+            },
+            {
+                "internalType": "uint256",
+                "name": "_index",
+                "type": "uint256"
+            }
+        ],
+        "name": "getDocumentVersion",
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "ipfsHash",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "fileType",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "note",
+                "type": "string"
+            },
+            {
+                "internalType": "address",
+                "name": "author",
+                "type": "address"
+            },
+            {
+                "internalType": "string",
+                "name": "authorName",
+                "type": "string"
+            },
+            {
+                "internalType": "uint256",
+                "name": "timestamp",
+                "type": "uint256"
             }
         ],
         "stateMutability": "view",
@@ -677,6 +834,50 @@ export const CONTRACT_ABI = [
     {
         "inputs": [
             {
+                "internalType": "string",
+                "name": "_evidenceId",
+                "type": "string"
+            }
+        ],
+        "name": "getLatestVersion",
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "ipfsHash",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "fileType",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "note",
+                "type": "string"
+            },
+            {
+                "internalType": "address",
+                "name": "author",
+                "type": "address"
+            },
+            {
+                "internalType": "string",
+                "name": "authorName",
+                "type": "string"
+            },
+            {
+                "internalType": "uint256",
+                "name": "timestamp",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
                 "internalType": "uint256",
                 "name": "_index",
                 "type": "uint256"
@@ -796,6 +997,25 @@ export const CONTRACT_ABI = [
                 "internalType": "string",
                 "name": "",
                 "type": "string"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "_evidenceId",
+                "type": "string"
+            }
+        ],
+        "name": "getVersionCount",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
             }
         ],
         "stateMutability": "view",
