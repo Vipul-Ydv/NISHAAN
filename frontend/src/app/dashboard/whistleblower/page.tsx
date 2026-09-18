@@ -98,7 +98,7 @@ export default function Whistleblower() {
         try {
             const hash = await uploadToPinata(file);
 
-            setStatusMessage("File locked. Submitting anonymous transaction to Ethereum...");
+            setStatusMessage("File pinned. Submitting tip transaction to Ethereum...");
 
             const tx = await contract.submitAnonymousTip(hash, description);
 
@@ -187,7 +187,7 @@ export default function Whistleblower() {
                             </div>
 
                             <div className="space-y-2">
-                                <label className="text-xs font-black uppercase tracking-widest text-zinc-500">Encrypted Asset Upload</label>
+                                <label className="text-xs font-black uppercase tracking-widest text-zinc-500">Evidence File Upload</label>
                                 <div className={`relative h-48 border-2 border-dashed flex flex-col items-center justify-center transition-all ${file ? 'border-red-500 bg-red-500/10' : 'border-zinc-700 hover:border-zinc-500 bg-zinc-900'}`}>
                                     <input
                                         required type="file" onChange={handleFileChange}

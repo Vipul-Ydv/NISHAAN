@@ -608,7 +608,7 @@ export default function PoliceDashboard() {
                                                 className="w-full flex items-center justify-center gap-4 py-6 bg-black text-white hover:bg-zinc-800 transition-all shadow-[8px_8px_0px_0px_rgba(0,0,0,0.3)] disabled:opacity-50 group"
                                             >
                                                 {isUploading || isScanning ? (
-                                                    <><Loader2 className="w-6 h-6 animate-spin" /> <span className="font-black uppercase tracking-widest">{isScanning ? 'Running AI Diagnostics...' : 'Encrypting_and_Hashing...'}</span></>
+                                                    <><Loader2 className="w-6 h-6 animate-spin" /> <span className="font-black uppercase tracking-widest">{isScanning ? 'Running AI Diagnostics...' : 'Hashing_and_Pinning...'}</span></>
                                                 ) : (
                                                     <>
                                                         <Lock size={20} />
@@ -652,7 +652,7 @@ export default function PoliceDashboard() {
                                                                 <span className="text-zinc-400 font-mono text-[10px]">{new Date(tip.timestamp * 1000).toLocaleString()}</span>
                                                             </div>
                                                             <a href={`https://gateway.pinata.cloud/ipfs/${tip.hash}`} target="_blank" rel="noopener noreferrer" className="bg-white text-black px-4 py-2 font-black text-xs hover:bg-zinc-300 transition-colors">
-                                                                View Encrypted Asset
+                                                                View File on IPFS
                                                             </a>
                                                         </div>
                                                         <p className="font-mono text-sm leading-relaxed text-zinc-300 mb-6 whitespace-pre-wrap font-bold">
