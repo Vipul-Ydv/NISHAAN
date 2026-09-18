@@ -21,6 +21,7 @@ import {
     toBase64,
     fromBase64,
 } from "./crypto";
+import { CONTRACT_ADDRESS } from "./constants";
 
 /** Public IPFS gateway used to fetch ciphertext back. */
 const IPFS_GATEWAY = "https://ipfs.io/ipfs";
@@ -51,7 +52,10 @@ export async function getKeypair(
     }
 
     const signer = await provider.getSigner();
-    const keypair = await deriveEncryptionKeypair(signer);
+    // The chain and contract enter the EIP-712 domain, so a key derived against
+    // one deployment is not reproducible against another.
+    const { chainId } = await provider.getNetwork();
+    const keypair = await deriveEncryptionKeypair(signer, chainId, CONTRACT_ADDRESS);
     cachedKeypair = { account, keypair };
     return keypair;
 }

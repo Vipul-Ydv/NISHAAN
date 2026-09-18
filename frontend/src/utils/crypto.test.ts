@@ -14,7 +14,7 @@ import nacl from "tweetnacl";
 import { ethers } from "ethers";
 
 import {
-    KEY_DERIVATION_MESSAGE,
+    KEY_DERIVATION_VALUE,
     deriveEncryptionKeypair,
     generateContentKey,
     exportContentKey,
@@ -42,8 +42,8 @@ test("base64 round-trips arbitrary bytes", () => {
 test("key derivation is deterministic for the same wallet", async () => {
     const wallet = new ethers.Wallet(COURT_KEY);
 
-    const first = await deriveEncryptionKeypair(wallet);
-    const second = await deriveEncryptionKeypair(wallet);
+    const first = await deriveEncryptionKeypair(wallet, 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+    const second = await deriveEncryptionKeypair(wallet, 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
 
     // The keypair is never stored, so it must be re-derivable on any device.
     assert.deepEqual(Array.from(first.publicKey), Array.from(second.publicKey));
@@ -51,24 +51,40 @@ test("key derivation is deterministic for the same wallet", async () => {
 });
 
 test("different wallets derive different keypairs", async () => {
-    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY));
-    const police = await deriveEncryptionKeypair(new ethers.Wallet(POLICE_KEY));
+    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+    const police = await deriveEncryptionKeypair(new ethers.Wallet(POLICE_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
 
     assert.notDeepEqual(Array.from(court.publicKey), Array.from(police.publicKey));
 });
 
-test("derivation signs the app-specific message and nothing else", async () => {
-    let signed: string | null = null;
+test("derivation signs typed data bound to the chain and contract", async () => {
+    let seenDomain: Record<string, unknown> | null = null;
+    let seenValue: Record<string, unknown> | null = null;
     const wallet = new ethers.Wallet(COURT_KEY);
     const spy = {
-        signMessage: async (message: string) => {
-            signed = message;
-            return wallet.signMessage(message);
+        signTypedData: async (domain: never, types: never, value: never) => {
+            seenDomain = domain;
+            seenValue = value;
+            return wallet.signTypedData(domain, types, value);
         },
     } as unknown as ethers.Signer;
 
-    await deriveEncryptionKeypair(spy);
-    assert.equal(signed, KEY_DERIVATION_MESSAGE);
+    await deriveEncryptionKeypair(spy, 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+
+    assert.equal(seenDomain!.chainId, 31337);
+    assert.equal(seenDomain!.verifyingContract, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+    assert.deepEqual(seenValue, KEY_DERIVATION_VALUE);
+});
+
+test("a different chain or contract derives a different key", async () => {
+    const wallet = new ethers.Wallet(COURT_KEY);
+    const a = await deriveEncryptionKeypair(wallet, 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+    const b = await deriveEncryptionKeypair(wallet, 11155111, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+    const c = await deriveEncryptionKeypair(wallet, 31337, "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9");
+
+    // The domain is what scopes a derived key to one deployment.
+    assert.notDeepEqual(Array.from(a.publicKey), Array.from(b.publicKey));
+    assert.notDeepEqual(Array.from(a.publicKey), Array.from(c.publicKey));
 });
 
 test("a file round-trips through encrypt and decrypt", async () => {
@@ -120,7 +136,7 @@ test("truncated ciphertext is rejected", async () => {
 });
 
 test("a content key round-trips through wrapping to the right recipient", async () => {
-    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY));
+    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
     const contentKey = await exportContentKey(await generateContentKey());
 
     const wrapped = wrapContentKey(contentKey, court.publicKey);
@@ -130,8 +146,8 @@ test("a content key round-trips through wrapping to the right recipient", async 
 });
 
 test("a different account cannot open a sealed key", async () => {
-    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY));
-    const police = await deriveEncryptionKeypair(new ethers.Wallet(POLICE_KEY));
+    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+    const police = await deriveEncryptionKeypair(new ethers.Wallet(POLICE_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
     const contentKey = await exportContentKey(await generateContentKey());
 
     const wrappedForCourt = wrapContentKey(contentKey, court.publicKey);
@@ -144,7 +160,7 @@ test("a different account cannot open a sealed key", async () => {
 });
 
 test("wrapping the same key twice produces different blobs", async () => {
-    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY));
+    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
     const contentKey = await exportContentKey(await generateContentKey());
 
     // Fresh ephemeral keypair and nonce each time, so sealed blobs must differ.
@@ -155,12 +171,12 @@ test("wrapping the same key twice produces different blobs", async () => {
 });
 
 test("a malformed wrapped key is rejected", async () => {
-    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY));
+    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
     assert.throws(() => unwrapContentKey(toBase64(new Uint8Array(8)), court.secretKey), /malformed/i);
 });
 
 test("end to end: police seals to court, court decrypts, admin cannot", async () => {
-    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY));
+    const court = await deriveEncryptionKeypair(new ethers.Wallet(COURT_KEY), 31337, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
     const admin = { secretKey: nacl.box.keyPair().secretKey };
 
     // Police side.

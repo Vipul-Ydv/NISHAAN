@@ -386,6 +386,26 @@ describe("EvidenceManagement", function () {
             ).to.be.revertedWith("Wrapped key required");
         });
 
+        it("refuses to seal a key to the admin", async function () {
+            // The constructor registers and approves the admin, so without an
+            // explicit role check the admin would be a valid recipient and could
+            // be handed evidence it is only supposed to govern.
+            await contract.connect(admin).registerEncryptionKey("admin-x25519-pubkey");
+
+            await expect(
+                contract.connect(police).grantDecryptionKey("EV-1", admin.address, "sealed-for-admin")
+            ).to.be.revertedWith("Recipient must be Police or Court");
+
+            expect(await contract.hasDecryptionAccess("EV-1", admin.address)).to.equal(false);
+        });
+
+        it("allows sealing to another police officer", async function () {
+            await contract.connect(police).registerEncryptionKey("police-x25519-pubkey");
+            await contract.connect(police).grantDecryptionKey("EV-1", police.address, "sealed-for-self");
+
+            expect(await contract.hasDecryptionAccess("EV-1", police.address)).to.equal(true);
+        });
+
         it("blocks a court official from granting access", async function () {
             await expect(
                 contract.connect(court).grantDecryptionKey("EV-1", court.address, "self-grant")
