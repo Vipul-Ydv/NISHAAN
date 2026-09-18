@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWeb3 } from "../../../context/Web3Context";
 import { ensureKeyRegistered, sealFiles, grantAccess, listKeyHolders, getContentKeyFor } from "../../../utils/evidenceCrypto";
-import { encryptFile } from "../../../utils/crypto";
+import { encryptFile, exportContentKey } from "../../../utils/crypto";
 import { openEncryptedFile, downloadBlob } from "../../../utils/evidenceCrypto";
 import {
     UploadCloud, ShieldCheck, Loader2, File as FileIcon,
@@ -77,6 +77,14 @@ function JusticeNetworkBackground() {
     return <div ref={containerRef} className="fixed inset-0 -z-10 bg-white" />;
 }
 
+/** A court account and whether it can already decrypt a given case. */
+interface GrantStatus {
+    address: string;
+    name: string;
+    role: string;
+    hasAccess: boolean;
+}
+
 /** One on-chain revision of a case document. */
 interface VersionEntry {
     index: number;
@@ -110,6 +118,10 @@ export default function PoliceDashboard() {
     const [isVersioning, setIsVersioning] = useState(false);
     const [caseVersions, setCaseVersions] = useState<Record<string, VersionEntry[]>>({});
     const [decryptingCid, setDecryptingCid] = useState<string | null>(null);
+
+    // Who can currently decrypt each case, so access can be extended later.
+    const [caseGrants, setCaseGrants] = useState<Record<string, GrantStatus[]>>({});
+    const [isGranting, setIsGranting] = useState(false);
 
     // Missing Original/Added States
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -237,6 +249,58 @@ export default function PoliceDashboard() {
             setStatusMessage(`\u274c ${err.message}`);
         } finally {
             setDecryptingCid(null);
+        }
+    };
+
+    /** Lists courts with a published key and whether each can open this case. */
+    const loadGrantsFor = async (targetEvidenceId: string) => {
+        if (!contract) return;
+        try {
+            const courts = await listKeyHolders(contract, "Court");
+            const statuses: GrantStatus[] = [];
+            for (const court of courts) {
+                statuses.push({
+                    ...court,
+                    hasAccess: await contract.hasDecryptionAccess(targetEvidenceId, court.address),
+                });
+            }
+            setCaseGrants((prev) => ({ ...prev, [targetEvidenceId]: statuses }));
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    /**
+     * Extends decryption access on an existing record.
+     *
+     * Grants are made when a record is created, so a judge approved later - or
+     * one who published their key after the upload - would otherwise never be
+     * able to open historical evidence.
+     */
+    const handleGrantAccess = async (targetEvidenceId: string) => {
+        if (!contract || !provider || !account) return;
+
+        const pending = (caseGrants[targetEvidenceId] || []).filter((g) => !g.hasAccess);
+        if (pending.length === 0) return;
+
+        setIsGranting(true);
+        try {
+            setStatusMessage("Unwrapping this record's key to seal it for new readers...");
+            const contentKey = await getContentKeyFor(contract, provider, account, targetEvidenceId);
+            const contentKeyRaw = await exportContentKey(contentKey);
+
+            const granted = await grantAccess(
+                contract, targetEvidenceId, contentKeyRaw, pending, setStatusMessage
+            );
+
+            setStatusMessage(`✅ Access granted to: ${granted.map((g) => g.name).join(", ")}.`);
+            await loadGrantsFor(targetEvidenceId);
+            setTimeout(() => setStatusMessage(""), 6000);
+        } catch (err: any) {
+            console.error(err);
+            setStatusMessage(`❌ Could not grant access: ${err.message}`);
+        } finally {
+            setIsGranting(false);
         }
     };
 
@@ -457,10 +521,43 @@ export default function PoliceDashboard() {
                 return;
             }
         } else {
-            // Using tip hash directly without scanning
+            // A converted tip was pinned in the clear by the public portal, which
+            // has no key to seal to. Fetch it and re-pin an encrypted copy, so
+            // every evidence record is protected the same way and the court does
+            // not need a separate path to open tip-derived files.
             setIsUploading(true);
-            ipfsHashes.push(tipHash);
-            fileTypes.push("application/octet-stream");
+            try {
+                if (!provider || !account) throw new Error("Wallet is not connected.");
+                await ensureKeyRegistered(contract, provider, account, setStatusMessage);
+
+                setStatusMessage("Fetching the tip attachment so it can be encrypted...");
+                const res = await fetch(`https://gateway.pinata.cloud/ipfs/${tipHash}`);
+                if (!res.ok) {
+                    throw new Error(`Could not fetch the tip attachment (status ${res.status}).`);
+                }
+                const tipBlob = await res.blob();
+
+                setStatusMessage("Encrypting the tip attachment...");
+                const sealed = await sealFiles([
+                    new File([tipBlob], `tip-${tipHash}`, {
+                        type: tipBlob.type || "application/octet-stream",
+                    }),
+                ]);
+                contentKeyRaw = sealed.contentKeyRaw;
+
+                const upload = sealed.uploads[0];
+                ipfsHashes.push(await uploadToPinata(
+                    new File([upload.blob], `${upload.originalName}.enc`, {
+                        type: "application/octet-stream",
+                    })
+                ));
+                fileTypes.push(upload.originalType);
+            } catch (err: any) {
+                console.error(err);
+                setStatusMessage(`❌ Could not convert the tip: ${err.message}`);
+                setIsUploading(false);
+                return;
+            }
         }
 
         // --- BLOCKCHAIN PHASE ---
@@ -875,7 +972,17 @@ export default function PoliceDashboard() {
                                                             onClick={() => {
                                                                 const opening = expandedEvidence !== evidence.id;
                                                                 setExpandedEvidence(opening ? evidence.id : null);
-                                                                if (opening) loadVersionsFor(evidence.id);
+                                                                // The revision and append forms are rendered per case but
+                                                                // read shared state. Without this reset, a file picked for
+                                                                // one case would be submitted against the next one opened.
+                                                                setVersionFile(null);
+                                                                setVersionNote("");
+                                                                setAppendFiles([]);
+                                                                setStatusMessage("");
+                                                                if (opening) {
+                                                                    loadVersionsFor(evidence.id);
+                                                                    loadGrantsFor(evidence.id);
+                                                                }
                                                             }}
                                                         >
                                                             <div className="flex flex-col gap-2">
@@ -945,6 +1052,44 @@ export default function PoliceDashboard() {
                                                                             ))}
                                                                         </div>
                                                                     </div>
+                                                                </div>
+
+                                                                {/* Decryption Access */}
+                                                                <div className="border-[4px] border-black p-6 bg-white mt-6">
+                                                                    <h4 className="text-sm font-black uppercase tracking-tighter mb-4 flex items-center gap-2">
+                                                                        <ShieldCheck size={16} /> Who Can Decrypt
+                                                                    </h4>
+
+                                                                    {(caseGrants[evidence.id] || []).length === 0 ? (
+                                                                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                                                            No court has published an encryption key yet.
+                                                                        </p>
+                                                                    ) : (
+                                                                        <>
+                                                                            <ul className="space-y-2 mb-4">
+                                                                                {(caseGrants[evidence.id] || []).map((grant) => (
+                                                                                    <li key={grant.address} className="flex items-center justify-between gap-3 border-[2px] border-black px-3 py-2 bg-zinc-50">
+                                                                                        <span className="font-black uppercase text-[10px] truncate">{grant.name}</span>
+                                                                                        <span className={`shrink-0 px-2 py-1 text-[9px] font-black uppercase tracking-widest ${grant.hasAccess ? "bg-black text-white" : "border-[2px] border-black"}`}>
+                                                                                            {grant.hasAccess ? "Has access" : "No access"}
+                                                                                        </span>
+                                                                                    </li>
+                                                                                ))}
+                                                                            </ul>
+
+                                                                            {(caseGrants[evidence.id] || []).some((g) => !g.hasAccess) && (
+                                                                                <button
+                                                                                    onClick={() => handleGrantAccess(evidence.id)}
+                                                                                    disabled={isGranting}
+                                                                                    className="w-full py-3 bg-black text-white font-black uppercase text-xs tracking-widest hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 border-[3px] border-black"
+                                                                                >
+                                                                                    {isGranting
+                                                                                        ? <><Loader2 size={16} className="animate-spin" /> Sealing...</>
+                                                                                        : `Grant access to ${(caseGrants[evidence.id] || []).filter((g) => !g.hasAccess).length} court(s)`}
+                                                                                </button>
+                                                                            )}
+                                                                        </>
+                                                                    )}
                                                                 </div>
 
                                                                 {/* Revision History */}

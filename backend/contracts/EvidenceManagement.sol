@@ -444,6 +444,18 @@ contract EvidenceManagement {
         require(evidenceRecords[_evidenceId].exists, "Evidence does not exist");
         require(registeredUsers[_recipient], "Recipient not registered");
         require(bytes(_wrappedKey).length > 0, "Wrapped key required");
+
+        // The constructor registers and approves the admin, and the admin may
+        // publish an encryption key like anyone else. Without this check a
+        // police account could seal a content key to the admin, which would
+        // break the guarantee that governing access is not the same as reading
+        // evidence. Enforce it by role rather than trusting callers.
+        bytes32 recipientRole = keccak256(abi.encodePacked(userRoles[_recipient]));
+        require(
+            recipientRole == keccak256(abi.encodePacked("Police")) ||
+            recipientRole == keccak256(abi.encodePacked("Court")),
+            "Recipient must be Police or Court"
+        );
         require(
             bytes(encryptionPublicKeys[_recipient]).length > 0,
             "Recipient has not published an encryption key"

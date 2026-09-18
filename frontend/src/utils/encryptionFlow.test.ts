@@ -81,8 +81,8 @@ test(
         }
 
         // --- both publish encryption keys ---
-        const courtKeys = await deriveEncryptionKeypair(court);
-        const policeKeys = await deriveEncryptionKeypair(police);
+        const courtKeys = await deriveEncryptionKeypair(court, 31337, CONTRACT_ADDRESS);
+        const policeKeys = await deriveEncryptionKeypair(police, 31337, CONTRACT_ADDRESS);
         await (await asCourt.registerEncryptionKey(toBase64(courtKeys.publicKey))).wait();
         await (await asPolice.registerEncryptionKey(toBase64(policeKeys.publicKey))).wait();
 
