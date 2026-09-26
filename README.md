@@ -144,8 +144,13 @@ npm run node
 1. Open your wallet extension and choose "Add Network".
 2. Network Name: `Localhost 8545`
 3. RPC URL: `http://127.0.0.1:8545`
-4. Chain ID: `31337`
+4. Chain ID: `31338`
 5. Currency Symbol: `ETH`
+
+> The chain id is `31338`, not Hardhat's default `31337`. MetaMask caches block
+> state per chain id, so a wallet that has seen any other local `31337` chain
+> keeps querying a block this one does not have, and every contract call fails
+> with `missing revert data`. A distinct id sidesteps that entirely.
 
 ### 2. Deploy the Smart Contract
 
