@@ -164,23 +164,23 @@ describe("EvidenceManagement", function () {
         });
 
         it("lets the court verify", async function () {
-            await contract.connect(court).updateEvidenceStatus("EV-1", 2); // Verified
+            await contract.connect(court).updateEvidenceStatus("EV-1", 2, ""); // Verified
             expect(await contract.getEvidenceStatus("EV-1")).to.equal(2n);
         });
 
         it("stops police from verifying their own evidence", async function () {
             await expect(
-                contract.connect(police).updateEvidenceStatus("EV-1", 2)
+                contract.connect(police).updateEvidenceStatus("EV-1", 2, "")
             ).to.be.revertedWith("Only court officials can verify evidence");
         });
 
         it("lets police move evidence to UnderReview", async function () {
-            await contract.connect(police).updateEvidenceStatus("EV-1", 1); // UnderReview
+            await contract.connect(police).updateEvidenceStatus("EV-1", 1, "Awaiting the forensic report."); // UnderReview
             expect(await contract.getEvidenceStatus("EV-1")).to.equal(1n);
         });
 
         it("logs the status change in the chain of custody", async function () {
-            await contract.connect(court).updateEvidenceStatus("EV-1", 2);
+            await contract.connect(court).updateEvidenceStatus("EV-1", 2, "");
             const record = await contract.getChainOfCustodyRecord("EV-1", 1);
             expect(record.action).to.equal("StatusChanged");
             expect(record.accessorRole).to.equal("Court");
@@ -276,6 +276,60 @@ describe("EvidenceManagement", function () {
 
         it("rejects getLatestVersion when nothing is recorded", async function () {
             await expect(contract.getLatestVersion("EV-1")).to.be.revertedWith("No versions recorded");
+        });
+    });
+
+    describe("status change reasons", function () {
+        beforeEach(async function () {
+            await onboard(police, "Officer Rane", "Police");
+            await onboard(court, "Judge Menon", "Court");
+            await contract.connect(police).addEvidence(
+                "EV-1", ["Qm1"], "FIR/2026/001", "Pune", "Theft", ["application/pdf"]
+            );
+        });
+
+        it("records the reason a record was flagged for review", async function () {
+            await contract.connect(court).updateEvidenceStatus(
+                "EV-1", 1, "Medical report contradicts the complainant statement."
+            );
+
+            const length = Number(await contract.getChainOfCustodyLength("EV-1"));
+            const record = await contract.getChainOfCustodyRecord("EV-1", length - 1);
+            expect(record.action).to.equal("StatusChanged");
+            expect(record.note).to.equal("Medical report contradicts the complainant statement.");
+        });
+
+        it("refuses to flag for review without a reason", async function () {
+            // Flagging is the decision someone will later be asked to justify, so
+            // the contract will not accept it unexplained.
+            await expect(
+                contract.connect(court).updateEvidenceStatus("EV-1", 1, "")
+            ).to.be.revertedWith("A reason is required to flag for review");
+
+            expect(await contract.getEvidenceStatus("EV-1")).to.equal(0n);
+        });
+
+        it("allows verification without a reason", async function () {
+            await contract.connect(court).updateEvidenceStatus("EV-1", 2, "");
+
+            expect(await contract.getEvidenceStatus("EV-1")).to.equal(2n);
+            const length = Number(await contract.getChainOfCustodyLength("EV-1"));
+            expect((await contract.getChainOfCustodyRecord("EV-1", length - 1)).note).to.equal("");
+        });
+
+        it("keeps a reason given on verification", async function () {
+            await contract.connect(court).updateEvidenceStatus("EV-1", 2, "Chain of custody is intact.");
+
+            const length = Number(await contract.getChainOfCustodyLength("EV-1"));
+            expect((await contract.getChainOfCustodyRecord("EV-1", length - 1)).note)
+                .to.equal("Chain of custody is intact.");
+        });
+
+        it("leaves other custody entries with an empty note", async function () {
+            // Submitted was written before this feature existed; it must still read.
+            const record = await contract.getChainOfCustodyRecord("EV-1", 0);
+            expect(record.action).to.equal("Submitted");
+            expect(record.note).to.equal("");
         });
     });
 

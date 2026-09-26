@@ -24,7 +24,9 @@ file produces a different CID and no longer matches the on-chain record.
   accounts can mark evidence Verified, and an **Admin** account provisions access.
 - **Transparent Chain of Custody:** Every submission, append, view and status
   change appends an immutable `AccessRecord` with the actor's address, name, role
-  and timestamp.
+  and timestamp. A status change also carries the reason it was made: flagging a
+  record for review is refused without one, so a decision someone may later be
+  asked to justify is never recorded unexplained.
 - **Append-Only Case History:** New files can be added to an existing evidence
   record via `appendEvidence` without overwriting what is already anchored.
 - **Metadata & Forgery Screening:** Uploaded images are scanned client-side with
