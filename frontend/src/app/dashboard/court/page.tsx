@@ -73,6 +73,16 @@ function ThreeBackground() {
     return <div ref={containerRef} className="fixed inset-0 -z-10 bg-white" />;
 }
 
+/** One entry in a record's on-chain chain of custody. */
+interface CustodyEntry {
+    index: number;
+    actor: string;
+    role: string;
+    action: string;
+    note: string;
+    timestamp: number;
+}
+
 /** One row of the searchable case index. */
 interface CaseRecord {
     id: string;
@@ -107,6 +117,10 @@ export default function CourtDashboard() {
     const [decryptingCid, setDecryptingCid] = useState<string | null>(null);
     const [hasKey, setHasKey] = useState(false);
     const [isPublishingKey, setIsPublishingKey] = useState(false);
+
+    // Why a status is being changed, and the record's full custody trail.
+    const [reason, setReason] = useState("");
+    const [custody, setCustody] = useState<CustodyEntry[]>([]);
     useEffect(() => {
         if (!isLoading) {
             if (!account || (role !== "Court" && status !== 2)) {
@@ -203,6 +217,30 @@ export default function CourtDashboard() {
         ? allRecords.filter((r) => matchesQuery(r, searchQuery))
         : allRecords;
 
+    /** Reads the full custody trail so the record can show who did what, and why. */
+    const loadCustody = async (id: string) => {
+        if (!contract) return;
+        try {
+            const count = Number(await contract.getChainOfCustodyLength(id));
+            const entries: CustodyEntry[] = [];
+            for (let i = 0; i < count; i++) {
+                const r = await contract.getChainOfCustodyRecord(id, i);
+                entries.push({
+                    index: i,
+                    actor: r[1],
+                    role: r[2],
+                    timestamp: Number(r[3]),
+                    action: r[4],
+                    note: r[5],
+                });
+            }
+            setCustody(entries);
+        } catch (err) {
+            console.error(err);
+            setCustody([]);
+        }
+    };
+
     const loadVersions = async (id: string) => {
         if (!contract) return;
         try {
@@ -261,6 +299,8 @@ export default function CourtDashboard() {
             });
 
             await loadVersions(id);
+            await loadCustody(id);
+            setReason("");
             setHasKey(await contract.hasDecryptionAccess(id, account));
             setStatusMessage("");
         } catch (err: any) {
@@ -315,13 +355,22 @@ export default function CourtDashboard() {
 
     const updateStatus = async (newStatus: number) => {
         if (!contract || !evidenceId) return;
+
+        // The contract rejects an unexplained flag; say so before spending gas.
+        if (newStatus === 1 && !reason.trim()) {
+            setStatusMessage("❌ Flagging for review needs a reason.");
+            return;
+        }
+
         setIsUpdating(true);
         setStatusMessage("Submitting status change to blockchain...");
         try {
-            const tx = await contract.updateEvidenceStatus(evidenceId, newStatus);
+            const tx = await contract.updateEvidenceStatus(evidenceId, newStatus, reason.trim());
             await tx.wait();
-            setStatusMessage("✅ Evidence status updated cryptographically!");
+            setStatusMessage("✅ Status updated, with the reason recorded on-chain.");
             setEvidenceData({ ...evidenceData, status: newStatus });
+            setReason("");
+            await loadCustody(evidenceId);
         } catch (err: any) {
             console.error(err);
             setStatusMessage(`❌ Error updating status: ${err.message}`);
@@ -561,6 +610,45 @@ export default function CourtDashboard() {
                                         </div>
                                     </div>
 
+                                    {/* Chain of Custody */}
+                                    <div className="pt-8 border-t-[6px] border-black mt-8">
+                                        <div className="flex items-center gap-3 mb-4">
+                                            <Fingerprint size={24} strokeWidth={3} />
+                                            <h4 className="text-xl font-black uppercase tracking-tighter">
+                                                Chain of Custody ({custody.length})
+                                            </h4>
+                                        </div>
+
+                                        {custody.length === 0 ? (
+                                            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-400 border-[3px] border-dashed border-black/20 p-5">
+                                                No custody entries recorded yet.
+                                            </p>
+                                        ) : (
+                                            <ol className="space-y-3">
+                                                {[...custody].reverse().map((entry) => (
+                                                    <li key={entry.index} className="border-[4px] border-black p-5 bg-zinc-50">
+                                                        <div className="flex items-start justify-between gap-4 mb-2">
+                                                            <span className="bg-black text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest shrink-0">
+                                                                {String(entry.index + 1).padStart(2, "0")} &middot; {entry.action}
+                                                            </span>
+                                                            <span className="font-mono text-[9px] font-black uppercase text-zinc-500 text-right">
+                                                                {new Date(entry.timestamp * 1000).toLocaleString()}
+                                                            </span>
+                                                        </div>
+                                                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-zinc-600">
+                                                            {entry.actor} &middot; {entry.role}
+                                                        </p>
+                                                        {entry.note && (
+                                                            <p className="mt-3 border-l-[4px] border-black pl-3 text-sm font-bold italic leading-snug">
+                                                                {entry.note}
+                                                            </p>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ol>
+                                        )}
+                                    </div>
+
                                     {/* Revision History */}
                                     <div className="pt-8 border-t-[6px] border-black mt-8">
                                         <div className="flex items-center gap-3 mb-4">
@@ -645,7 +733,23 @@ export default function CourtDashboard() {
                                             })}
                                         </div>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t-[3px] border-dashed border-black/20">
+                                        <div className="pt-6 border-t-[3px] border-dashed border-black/20">
+                                            <label className="block text-[10px] font-black uppercase tracking-[0.25em] mb-2">
+                                                Reason for this decision
+                                            </label>
+                                            <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-3">
+                                                Required to flag for review. Stored on-chain with your name and cannot be edited later.
+                                            </p>
+                                            <textarea
+                                                value={reason}
+                                                onChange={(e) => setReason(e.target.value)}
+                                                rows={2}
+                                                placeholder="e.g. Medical report contradicts the complainant statement."
+                                                className="w-full border-[3px] border-black px-4 py-3 font-mono text-xs font-bold focus:outline-none focus:bg-zinc-50 resize-none"
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6">
                                             <button
                                                 disabled={isUpdating || evidenceData.status === 2}
                                                 onClick={() => updateStatus(2)}
@@ -655,7 +759,8 @@ export default function CourtDashboard() {
                                                 Verify Files (Approve)
                                             </button>
                                             <button
-                                                disabled={isUpdating || evidenceData.status === 1}
+                                                disabled={isUpdating || evidenceData.status === 1 || !reason.trim()}
+                                                title={reason.trim() ? "Flag this record for review" : "Enter a reason first"}
                                                 onClick={() => updateStatus(1)}
                                                 className="flex items-center justify-center gap-3 py-4 border-[4px] border-black font-black uppercase tracking-tighter hover:bg-red-50 hover:text-red-600 hover:border-red-600 transition-all disabled:opacity-20"
                                             >

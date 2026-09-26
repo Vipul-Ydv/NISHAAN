@@ -102,7 +102,9 @@ async function main() {
     }
 
     // --- one court action so a status other than Submitted exists ---
-    await (await contract.connect(court).updateEvidenceStatus("EVD-2026-0003", 2)).wait(); // Verified
+    await (await contract.connect(court).updateEvidenceStatus(
+        "EVD-2026-0003", 2, "Hashes match the anchored record; custody trail is complete."
+    )).wait(); // Verified
     console.log("EVD-2026-0003 marked Verified by the court");
 
     // --- an anonymous tip ---
