@@ -494,6 +494,11 @@ export const CONTRACT_ABI = [
                 "internalType": "string",
                 "name": "action",
                 "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "note",
+                "type": "string"
             }
         ],
         "stateMutability": "view",
@@ -686,6 +691,11 @@ export const CONTRACT_ABI = [
             {
                 "internalType": "string",
                 "name": "action",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "note",
                 "type": "string"
             }
         ],
@@ -1324,6 +1334,11 @@ export const CONTRACT_ABI = [
                 "internalType": "enum EvidenceManagement.EvidenceStatus",
                 "name": "_newStatus",
                 "type": "uint8"
+            },
+            {
+                "internalType": "string",
+                "name": "_reason",
+                "type": "string"
             }
         ],
         "name": "updateEvidenceStatus",

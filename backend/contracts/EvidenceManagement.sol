@@ -33,7 +33,8 @@ contract EvidenceManagement {
         string accessorName;
         string accessorRole;
         uint256 timestamp;
-        string action; // "Viewed", "Verified", "StatusChanged"
+        string action; // "Submitted", "Viewed", "StatusChanged", "VersionAdded", ...
+        string note;   // why, for actions that require a justification
     }
 
     /// @notice One revision of a case document, anchored on-chain.
@@ -221,7 +222,8 @@ contract EvidenceManagement {
             accessorName: userNames[msg.sender],
             accessorRole: userRoles[msg.sender],
             timestamp: block.timestamp,
-            action: "Submitted"
+            action: "Submitted",
+            note: ""
         }));
 
         emit EvidenceAdded(_evidenceId, _ipfsHashes.length, userNames[msg.sender], block.timestamp);
@@ -247,7 +249,8 @@ contract EvidenceManagement {
             accessorName: userNames[msg.sender],
             accessorRole: userRoles[msg.sender],
             timestamp: block.timestamp,
-            action: "AppendedFiles"
+            action: "AppendedFiles",
+            note: ""
         }));
         
         emit EvidenceAppended(_evidenceId, _newIpfsHashes.length, msg.sender, block.timestamp);
@@ -283,7 +286,8 @@ contract EvidenceManagement {
             accessorName: userNames[msg.sender],
             accessorRole: userRoles[msg.sender],
             timestamp: block.timestamp,
-            action: "VersionAdded"
+            action: "VersionAdded",
+            note: ""
         }));
 
         emit DocumentVersionAdded(_evidenceId, versionIndex, msg.sender, block.timestamp);
@@ -340,7 +344,8 @@ contract EvidenceManagement {
             accessorName: userNames[msg.sender],
             accessorRole: userRoles[msg.sender],
             timestamp: block.timestamp,
-            action: "Viewed"
+            action: "Viewed",
+            note: ""
         }));
 
         emit EvidenceAccessed(_evidenceId, msg.sender, block.timestamp);
@@ -381,7 +386,14 @@ contract EvidenceManagement {
         );
     }
 
-    function updateEvidenceStatus(string memory _evidenceId, EvidenceStatus _newStatus) public onlyApproved {
+    /// @param _reason Why the status is changing. Required when flagging for
+    /// review, since that is the decision someone is later asked to justify;
+    /// optional on verification, where the status itself is the statement.
+    function updateEvidenceStatus(
+        string memory _evidenceId,
+        EvidenceStatus _newStatus,
+        string memory _reason
+    ) public onlyApproved {
         require(evidenceRecords[_evidenceId].exists, "Evidence does not exist");
 
         // Only Court can mark as Verified, only Police can mark as UnderReview
@@ -392,6 +404,10 @@ contract EvidenceManagement {
             );
         }
 
+        if (_newStatus == EvidenceStatus.UnderReview) {
+            require(bytes(_reason).length > 0, "A reason is required to flag for review");
+        }
+
         evidenceRecords[_evidenceId].status = _newStatus;
 
         // Record in Chain of Custody
@@ -400,7 +416,8 @@ contract EvidenceManagement {
             accessorName: userNames[msg.sender],
             accessorRole: userRoles[msg.sender],
             timestamp: block.timestamp,
-            action: "StatusChanged"
+            action: "StatusChanged",
+            note: _reason
         }));
 
         emit EvidenceStatusChanged(_evidenceId, _newStatus, msg.sender, block.timestamp);
@@ -468,7 +485,8 @@ contract EvidenceManagement {
             accessorName: userNames[msg.sender],
             accessorRole: userRoles[msg.sender],
             timestamp: block.timestamp,
-            action: "AccessGranted"
+            action: "AccessGranted",
+            note: ""
         }));
 
         emit DecryptionAccessGranted(_evidenceId, _recipient, msg.sender, block.timestamp);
@@ -496,10 +514,18 @@ contract EvidenceManagement {
         string memory accessorName,
         string memory accessorRole,
         uint256 timestamp,
-        string memory action
+        string memory action,
+        string memory note
     ) {
         AccessRecord memory record = chainOfCustody[_evidenceId][_index];
-        return (record.accessedBy, record.accessorName, record.accessorRole, record.timestamp, record.action);
+        return (
+            record.accessedBy,
+            record.accessorName,
+            record.accessorRole,
+            record.timestamp,
+            record.action,
+            record.note
+        );
     }
 
     // --- View Functions ---
