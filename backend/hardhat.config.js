@@ -14,8 +14,15 @@ export default {
         },
     },
     networks: {
+        // Local demo chain. chainId is 31338 rather than the default 31337 so
+        // MetaMask has no cached block state for it: a wallet that saw an older
+        // 31337 chain keeps querying a block this fresh chain does not have.
+        hardhat: {
+            chainId: 31338
+        },
         // Local hardhat node configuration
         localhost: {
+            chainId: 31338,
             url: "http://127.0.0.1:8545"
         },
         // Sepolia testnet deployment
